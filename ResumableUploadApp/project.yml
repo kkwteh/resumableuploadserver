@@ -1,0 +1,22 @@
+name: ResumableUploadApp
+options:
+  bundleIdPrefix: com.resumableupload
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+targets:
+  ResumableUploadApp:
+    type: application
+    platform: iOS
+    sources:
+      - ResumableUploadApp
+    settings:
+      base:
+        INFOPLIST_FILE: ResumableUploadApp/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PRODUCT_BUNDLE_IDENTIFIER: com.resumableupload.app
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
