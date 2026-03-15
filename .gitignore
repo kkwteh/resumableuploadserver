@@ -1,3 +1,4 @@
 BuildingAResumableUploadServerWithSwiftNIO/
 UploadServer/.build/
 ResumableUploadApp/ResumableUploadApp.xcodeproj/project.xcworkspace/xcuserdata/
+.DS_Store
