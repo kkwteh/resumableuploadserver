@@ -100,7 +100,7 @@ class UploadManager: NSObject, ObservableObject {
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.timeoutIntervalForResource = 3600
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
 
     // MARK: - Temp File Management
@@ -658,7 +658,7 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             // Clean up the temp file for this chunk
             if let taskDesc = task.taskDescription,
                taskDesc.hasPrefix("chunk_") {
@@ -676,7 +676,12 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
             if let error {
                 print("[UploadManager] Background task error: \(error)")
                 if !isPaused, !isCancelled {
-                    await setError("Upload failed: \(error.localizedDescription)")
+                    state = .failed
+                    errorMessage = "Upload failed: \(error.localizedDescription)"
+                    connectionInfo = "Error"
+                    stopSpeedTracking()
+                    currentBackgroundTask = nil
+                    print("[UploadManager] ERROR: Upload failed: \(error.localizedDescription)")
                 }
                 return
             }
@@ -685,7 +690,12 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
             guard task.originalRequest?.httpMethod == "PATCH" else { return }
 
             guard let httpResponse = task.response as? HTTPURLResponse else {
-                await setError("Invalid server response for background PATCH")
+                state = .failed
+                errorMessage = "Invalid server response for background PATCH"
+                connectionInfo = "Error"
+                stopSpeedTracking()
+                currentBackgroundTask = nil
+                print("[UploadManager] ERROR: Invalid server response for background PATCH")
                 return
             }
 
@@ -696,12 +706,19 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                 // Offset conflict — re-sync via HEAD
                 connectionInfo = "Offset conflict, re-syncing..."
                 print("[UploadManager] 409 Conflict, querying offset")
-                await queryOffsetAndResume()
+                Task {
+                    await queryOffsetAndResume()
+                }
                 return
             }
 
             guard (200...299).contains(statusCode) else {
-                await setError("PATCH returned \(statusCode)")
+                state = .failed
+                errorMessage = "PATCH returned \(statusCode)"
+                connectionInfo = "Error"
+                stopSpeedTracking()
+                currentBackgroundTask = nil
+                print("[UploadManager] ERROR: PATCH returned \(statusCode)")
                 return
             }
 
@@ -739,7 +756,7 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
     /// Called when all background events for a session have been delivered.
     /// Must call the system completion handler to tell iOS we're done updating the UI.
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             print("[UploadManager] Background session finished events")
             if let handler = UploadManager.backgroundSessionCompletionHandler {
                 UploadManager.backgroundSessionCompletionHandler = nil
