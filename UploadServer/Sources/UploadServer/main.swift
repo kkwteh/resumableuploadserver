@@ -31,11 +31,37 @@ let uploadContext = HTTPResumableUploadContext(origin: origin)
 let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 defer { try! group.syncShutdownGracefully() }
 
+/// Adds "Connection: close" to every HTTP/1.1 response so the server closes the
+/// TCP connection after each response. This is required because the resumable upload
+/// handler detaches after sending intermediate 201 responses, and a subsequent request
+/// on the same keep-alive connection would be silently dropped by the checkHandler guard.
+/// When behind a reverse proxy (ngrok), the proxy reuses connections, so the server
+/// must be the one to close them.
+final class ConnectionCloseHandler: ChannelOutboundHandler {
+    typealias OutboundIn = HTTPServerResponsePart
+    typealias OutboundOut = HTTPServerResponsePart
+
+    func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
+        let part = unwrapOutboundIn(data)
+        switch part {
+        case .head(var head):
+            head.headers.replaceOrAdd(name: "connection", value: "close")
+            context.write(wrapOutboundOut(.head(head)), promise: promise)
+        case .body, .end:
+            context.write(data, promise: promise)
+        }
+    }
+}
+
 let bootstrap = ServerBootstrap(group: group)
     .serverChannelOption(.backlog, value: 256)
     .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
     .childChannelInitializer { channel in
         channel.pipeline.configureHTTPServerPipeline().flatMap {
+            // ConnectionCloseHandler intercepts HTTP/1.1 responses before they hit the wire
+            // and adds Connection: close to force per-request connections.
+            channel.pipeline.addHandler(ConnectionCloseHandler())
+        }.flatMap {
             channel.pipeline.addHandler(HTTP1ToHTTPServerCodec(secure: false))
         }.flatMap {
             channel.pipeline.addHandler(
