@@ -4,7 +4,7 @@ import PhotosUI
 struct ContentView: View {
     @EnvironmentObject var uploadManager: UploadManager
     @State private var selectedItem: PhotosPickerItem?
-    @State private var serverURL: String = "https://5639-77-207-91-127.ngrok-free.app"
+    @State private var serverURL: String = "https://b703-77-207-91-127.ngrok-free.app"
     @State private var chunkSizeMB: Double = 1.0
 
     var body: some View {
