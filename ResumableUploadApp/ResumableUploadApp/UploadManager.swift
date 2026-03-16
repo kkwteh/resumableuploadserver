@@ -98,6 +98,8 @@ class UploadManager: NSObject, ObservableObject {
     private lazy var backgroundSession: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionID)
         config.isDiscretionary = false
+        config.allowsExpensiveNetworkAccess = true
+        config.allowsConstrainedNetworkAccess = true
         config.sessionSendsLaunchEvents = true
         config.timeoutIntervalForResource = 3600
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
