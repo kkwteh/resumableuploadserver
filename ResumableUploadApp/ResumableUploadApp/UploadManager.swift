@@ -181,6 +181,29 @@ class UploadManager: NSObject, ObservableObject {
         try? FileManager.default.removeItem(at: remainderTempFile)
     }
 
+    /// Remove the exported file from Documents/pending_uploads/ if it exists there.
+    private func cleanupExportedFile() {
+        guard let url = fileURL else { return }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let uploadsDir = docs.appendingPathComponent("pending_uploads")
+        if url.path.hasPrefix(uploadsDir.path) {
+            try? FileManager.default.removeItem(at: url)
+            print("[UploadManager] Cleaned up exported file: \(url.lastPathComponent)")
+        }
+    }
+
+    /// Remove all files in Documents/pending_uploads/ (for stale cleanup on fresh start).
+    private func cleanupAllPendingUploads() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let uploadsDir = docs.appendingPathComponent("pending_uploads")
+        if let files = try? FileManager.default.contentsOfDirectory(at: uploadsDir, includingPropertiesForKeys: nil) {
+            for file in files {
+                try? FileManager.default.removeItem(at: file)
+                print("[UploadManager] Cleaned up stale file: \(file.lastPathComponent)")
+            }
+        }
+    }
+
     // MARK: - File Loading
 
     /// Load a video from the PhotosPicker and immediately begin uploading.
@@ -231,8 +254,10 @@ class UploadManager: NSObject, ObservableObject {
             return
         }
 
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let destination = caches.appendingPathComponent(UUID().uuidString + "_" + resource.originalFilename)
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let uploadsDir = docs.appendingPathComponent("pending_uploads")
+        try? FileManager.default.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
+        let destination = uploadsDir.appendingPathComponent(UUID().uuidString + "_" + resource.originalFilename)
         try? FileManager.default.removeItem(at: destination)
 
         print("[UploadManager] Exporting asset to: \(destination.lastPathComponent)")
@@ -367,6 +392,7 @@ class UploadManager: NSObject, ObservableObject {
         stopSpeedTracking()
         clearPersistedState()
         cleanupTempFiles()
+        cleanupExportedFile()
         assetIdentifier = nil
         print("[UploadManager] Cancelled")
     }
@@ -387,6 +413,7 @@ class UploadManager: NSObject, ObservableObject {
         }
 
         if let saved = loadPersistedState() {
+            // Has persisted state — proceed with reconnection
             resumptionPath = saved.resumptionPath
             serverURL = saved.serverURL
             totalBytes = saved.totalBytes
@@ -430,6 +457,9 @@ class UploadManager: NSObject, ObservableObject {
                     }
                 }
             }
+        } else {
+            // No persisted state — clean up any stale files from a previous session
+            cleanupAllPendingUploads()
         }
     }
 
@@ -786,6 +816,7 @@ class UploadManager: NSObject, ObservableObject {
         stopSpeedTracking()
         clearPersistedState()
         cleanupTempFiles()
+        cleanupExportedFile()
         currentBackgroundTask = nil
 
         if let start = uploadStartTime {
