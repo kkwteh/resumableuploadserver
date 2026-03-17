@@ -3,6 +3,7 @@ import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
+import UserNotifications
 
 enum UploadState: String {
     case idle
@@ -806,6 +807,7 @@ class UploadManager: NSObject, ObservableObject {
             let totalMB = Double(totalBytes ?? 0) / 1_048_576
             speedDisplay = String(format: "Avg: %.1f MB/s (%.1fs)", totalMB / elapsed, elapsed)
         }
+        sendLocalNotification(title: "Upload Complete", body: "\(formatBytes(totalBytes ?? 0)) uploaded successfully.")
         print("[UploadManager] Upload complete! Total: \(formatBytes(totalBytes ?? 0))")
     }
 
@@ -816,6 +818,16 @@ class UploadManager: NSObject, ObservableObject {
         stopSpeedTracking()
         currentBackgroundTask = nil
         print("[UploadManager] ERROR: \(message)")
+    }
+
+    private func sendLocalNotification(title: String, body: String) {
+        guard UIApplication.shared.applicationState != .active else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
@@ -869,6 +881,7 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
             // Handle network errors — query offset and retry
             if let error {
                 print("[UploadManager] Background task error: \(error)")
+                sendLocalNotification(title: "Upload Interrupted", body: "Retrying automatically...")
                 if !isPaused, !isCancelled {
                     connectionInfo = "Transfer interrupted, resuming..."
                     currentBackgroundTask = nil
@@ -900,6 +913,7 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                 connectionInfo = "Error"
                 stopSpeedTracking()
                 currentBackgroundTask = nil
+                sendLocalNotification(title: "Upload Failed", body: "Invalid server response")
                 print("[UploadManager] ERROR: Invalid server response for background PATCH")
                 return
             }
@@ -923,6 +937,7 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                 connectionInfo = "Error"
                 stopSpeedTracking()
                 currentBackgroundTask = nil
+                sendLocalNotification(title: "Upload Failed", body: "Server returned \(statusCode). Open app to retry.")
                 print("[UploadManager] ERROR: PATCH returned \(statusCode)")
                 return
             }

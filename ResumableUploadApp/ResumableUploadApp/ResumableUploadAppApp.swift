@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
@@ -16,6 +17,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         print("[AppDelegate] App launched, options: \(launchOptions ?? [:])")
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            print("[AppDelegate] Notification permission: \(granted), error: \(error?.localizedDescription ?? "none")")
+        }
         return true
     }
 }
