@@ -20,6 +20,14 @@ let origin: String = {
     return "http://localhost:\(port)"
 }()
 
+// Ensure uploads directory exists
+import Foundation
+let uploadsDir = ThroughputHandler.uploadsDirectory
+if !FileManager.default.fileExists(atPath: uploadsDir) {
+    try FileManager.default.createDirectory(atPath: uploadsDir, withIntermediateDirectories: true)
+    print("Created \(uploadsDir)/ directory")
+}
+
 print("Starting resumable upload server on port \(port)")
 print("Origin: \(origin)")
 print("Usage: UploadServer [port] [origin]")

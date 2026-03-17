@@ -1,4 +1,5 @@
 UploadServer/.build/
+UploadServer/uploads/
 ResumableUploadApp/ResumableUploadApp.xcodeproj/project.xcworkspace/xcuserdata/
 .DS_Store
 launch.json

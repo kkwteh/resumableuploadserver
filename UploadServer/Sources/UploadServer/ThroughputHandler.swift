@@ -1,19 +1,25 @@
 import Dispatch
+import Foundation
 import HTTPTypes
 import HTTPTypesNIO
 import NIOCore
 
 /// Handler that receives the stripped (non-resumable) HTTP request on the child channel,
-/// counts bytes received, and responds with throughput stats.
+/// counts bytes received, writes them to disk, and responds with throughput stats.
 final class ThroughputHandler: ChannelInboundHandler {
     typealias InboundIn = HTTPTypeServerRequestPart
     typealias OutboundOut = HTTPTypeServerResponsePart
+
+    static let uploadsDirectory = "uploads"
 
     private var bytesReceived: Int64 = 0
     private var startTime: UInt64 = 0
     private var method: HTTPRequest.Method = .get
     private var lastLogTime: UInt64 = 0
     private static let logIntervalNanos: UInt64 = 2_000_000_000 // 2 seconds
+
+    private var fileHandle: FileHandle?
+    private var filePath: String?
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let part = unwrapInboundIn(data)
@@ -23,10 +29,21 @@ final class ThroughputHandler: ChannelInboundHandler {
             bytesReceived = 0
             startTime = DispatchTime.now().uptimeNanoseconds
             lastLogTime = startTime
-            print("[Upload] \(request.method) \(request.path ?? "/") started")
+
+            let filename = UUID().uuidString
+            let path = "\(Self.uploadsDirectory)/\(filename)"
+            FileManager.default.createFile(atPath: path, contents: nil)
+            fileHandle = FileHandle(forWritingAtPath: path)
+            filePath = path
+
+            print("[Upload] \(request.method) \(request.path ?? "/") started -> \(path)")
 
         case .body(let buffer):
             bytesReceived += Int64(buffer.readableBytes)
+
+            let data = Data(buffer.readableBytesView)
+            fileHandle?.write(data)
+
             let now = DispatchTime.now().uptimeNanoseconds
             if now - lastLogTime >= Self.logIntervalNanos {
                 let elapsed = Double(now - startTime) / 1_000_000_000
@@ -36,14 +53,19 @@ final class ThroughputHandler: ChannelInboundHandler {
             }
 
         case .end:
+            fileHandle?.closeFile()
+            fileHandle = nil
+
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startTime) / 1_000_000_000
             let speedMBps = elapsed > 0 ? Double(bytesReceived) / elapsed / 1_048_576 : 0
-            print("[Upload] Complete: \(formatBytes(bytesReceived)) in \(String(format: "%.2f", elapsed))s (\(String(format: "%.1f", speedMBps)) MB/s)")
+            let savedPath = filePath ?? "unknown"
+            filePath = nil
+            print("[Upload] Complete: \(formatBytes(bytesReceived)) in \(String(format: "%.2f", elapsed))s (\(String(format: "%.1f", speedMBps)) MB/s) -> \(savedPath)")
 
             var response = HTTPResponse(status: .ok)
             response.headerFields[.contentType] = "application/json"
             let json = """
-            {"bytes_received":\(bytesReceived),"elapsed_seconds":\(String(format: "%.2f", elapsed)),"speed_mbps":\(String(format: "%.1f", speedMBps))}
+            {"bytes_received":\(bytesReceived),"elapsed_seconds":\(String(format: "%.2f", elapsed)),"speed_mbps":\(String(format: "%.1f", speedMBps)),"file":"\(savedPath)"}
             """
             var buffer = context.channel.allocator.buffer(capacity: json.utf8.count)
             buffer.writeString(json)
