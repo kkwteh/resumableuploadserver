@@ -1,6 +1,7 @@
 import Foundation
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 enum UploadState: String {
@@ -112,16 +113,31 @@ class UploadManager: NSObject, ObservableObject {
 
     /// Write the remaining bytes from the given offset to a temp file for background upload.
     /// Only needed when resuming from a non-zero offset; at offset 0 the original file is used directly.
+    /// Streams the copy with a fixed buffer to avoid loading the entire remainder into memory.
     private func writeRemainderToTempFile(offset: Int64) -> URL? {
         guard let fileURL else { return nil }
         guard let total = totalBytes, offset < total else { return nil }
 
-        let length = total - offset
-        guard let data = readChunk(from: fileURL, offset: offset, length: length) else { return nil }
-
         let tempFile = remainderTempFile
         do {
-            try data.write(to: tempFile)
+            let reader = try FileHandle(forReadingFrom: fileURL)
+            defer { reader.closeFile() }
+            reader.seek(toFileOffset: UInt64(offset))
+
+            FileManager.default.createFile(atPath: tempFile.path, contents: nil)
+            let writer = try FileHandle(forWritingTo: tempFile)
+            defer { writer.closeFile() }
+
+            let bufferSize = 1_048_576 // 1MB
+            var remaining = total - offset
+            while remaining > 0 {
+                let toRead = min(Int64(bufferSize), remaining)
+                let chunk = reader.readData(ofLength: Int(toRead))
+                guard !chunk.isEmpty else { break }
+                writer.write(chunk)
+                remaining -= Int64(chunk.count)
+            }
+
             return tempFile
         } catch {
             print("[UploadManager] Failed to write remainder temp file: \(error)")
@@ -343,13 +359,13 @@ class UploadManager: NSObject, ObservableObject {
             print("[UploadManager] POST response: \(httpResponse.statusCode)")
             print("[UploadManager] Headers: \(httpResponse.allHeaderFields)")
 
-            guard httpResponse.statusCode == 201 else {
-                await setError("Server returned \(httpResponse.statusCode) (expected 201)")
+            guard (200...299).contains(httpResponse.statusCode) else {
+                await setError("Server returned \(httpResponse.statusCode)")
                 return
             }
 
             guard let location = httpResponse.value(forHTTPHeaderField: "Location") else {
-                await setError("No Location header in 201 response")
+                await setError("No Location header in upload creation response")
                 return
             }
 
@@ -673,8 +689,19 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                     connectionInfo = "Transfer interrupted, resuming..."
                     currentBackgroundTask = nil
                     print("[UploadManager] Transfer interrupted, querying offset to retry")
+
+                    // Request background execution time for the HEAD + temp file write + re-enqueue
+                    var bgTaskID = UIBackgroundTaskIdentifier.invalid
+                    bgTaskID = UIApplication.shared.beginBackgroundTask {
+                        UIApplication.shared.endBackgroundTask(bgTaskID)
+                        bgTaskID = .invalid
+                    }
+
                     Task {
                         await self.queryOffsetAndResume()
+                        if bgTaskID != .invalid {
+                            UIApplication.shared.endBackgroundTask(bgTaskID)
+                        }
                     }
                 }
                 return
