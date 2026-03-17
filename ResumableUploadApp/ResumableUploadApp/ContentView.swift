@@ -17,7 +17,7 @@ struct ContentView: View {
                 }
 
                 Section("File") {
-                    PhotosPicker(selection: $selectedItem, matching: .videos) {
+                    PhotosPicker(selection: $selectedItem, matching: .videos, photoLibrary: .shared()) {
                         Label(
                             uploadManager.selectedFileName ?? "Select Video",
                             systemImage: "video.fill"
@@ -58,8 +58,13 @@ struct ContentView: View {
                 }
 
                 Section("Progress") {
-                    ProgressView(value: uploadManager.progress)
-                        .progressViewStyle(.linear)
+                    if uploadManager.state == .preparing {
+                        ProgressView(value: uploadManager.preparationProgress)
+                            .progressViewStyle(.linear)
+                    } else {
+                        ProgressView(value: uploadManager.progress)
+                            .progressViewStyle(.linear)
+                    }
 
                     LabeledContent("Status", value: uploadManager.state.displayName)
                     LabeledContent("Uploaded", value: formatBytes(uploadManager.bytesUploaded))

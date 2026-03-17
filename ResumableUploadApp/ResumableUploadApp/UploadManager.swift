@@ -3,7 +3,6 @@ import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 enum UploadState: String {
     case idle
@@ -55,6 +54,7 @@ class UploadManager: NSObject, ObservableObject {
     @Published var connectionInfo: String = "Idle"
     @Published var errorMessage: String? = nil
     @Published var selectedFileName: String? = nil
+    @Published var preparationProgress: Double = 0
 
     // MARK: - Computed
 
@@ -154,41 +154,103 @@ class UploadManager: NSObject, ObservableObject {
     // MARK: - File Loading
 
     /// Load a video from the PhotosPicker and immediately begin uploading.
-    /// Uses the temp URL provided by the system (no copy). Persists the PHAsset.localIdentifier
-    /// so the asset can be re-exported from Photos if the upload fails and the app relaunches.
+    /// Uses PHAssetResourceManager to export the video with progress tracking,
+    /// instead of loadTransferable which provides no progress for large files.
     func loadVideoAndUpload(from item: PhotosPickerItem, serverURL: String) async {
         state = .preparing
+        preparationProgress = 0
         connectionInfo = "Loading video..."
+
+        // Request Photos library access so we can use PHAsset APIs for progress tracking.
+        // PhotosPicker alone doesn't grant PHAsset-level access.
+        let authStatus = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        guard authStatus == .authorized || authStatus == .limited else {
+            state = .idle
+            errorMessage = "Photos library access is required to upload videos"
+            connectionInfo = "Idle"
+            print("[UploadManager] Photos authorization denied: \(authStatus.rawValue)")
+            return
+        }
 
         // Persist the asset identifier for re-export on failure/relaunch
         assetIdentifier = item.itemIdentifier
-        print("[UploadManager] Starting loadTransferable for item: \(item.itemIdentifier ?? "unknown")")
-        print("[UploadManager] Supported content types: \(item.supportedContentTypes)")
+        print("[UploadManager] Starting export for item: \(item.itemIdentifier ?? "unknown")")
+
+        guard let identifier = item.itemIdentifier else {
+            state = .idle
+            errorMessage = "No asset identifier — please grant full Photos access in Settings"
+            connectionInfo = "Idle"
+            return
+        }
+
+        let results = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+        guard let asset = results.firstObject else {
+            state = .idle
+            errorMessage = "Could not find video in Photos library"
+            connectionInfo = "Idle"
+            print("[UploadManager] PHAsset not found for identifier: \(identifier)")
+            return
+        }
+
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .video })
+                ?? PHAssetResource.assetResources(for: asset).first else {
+            state = .idle
+            errorMessage = "No video resource found"
+            connectionInfo = "Idle"
+            print("[UploadManager] No video resource for asset")
+            return
+        }
+
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let destination = caches.appendingPathComponent(UUID().uuidString + "_" + resource.originalFilename)
+        try? FileManager.default.removeItem(at: destination)
+
+        print("[UploadManager] Exporting asset to: \(destination.lastPathComponent)")
+
+        let exportedURL: URL? = await withCheckedContinuation { continuation in
+            let options = PHAssetResourceRequestOptions()
+            options.isNetworkAccessAllowed = true
+            options.progressHandler = { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.preparationProgress = progress
+                    self?.connectionInfo = "Loading video... \(Int(progress * 100))%"
+                }
+            }
+            PHAssetResourceManager.default().writeData(for: resource, toFile: destination, options: options) { error in
+                if let error {
+                    print("[UploadManager] Asset export failed: \(error)")
+                    continuation.resume(returning: nil)
+                } else {
+                    print("[UploadManager] Asset export succeeded: \(destination.lastPathComponent)")
+                    continuation.resume(returning: destination)
+                }
+            }
+        }
+
+        guard let exportedURL else {
+            state = .idle
+            errorMessage = "Failed to export video from Photos"
+            connectionInfo = "Idle"
+            return
+        }
 
         do {
-            guard let videoData = try await item.loadTransferable(type: VideoFileTransferable.self) else {
-                print("[UploadManager] loadTransferable returned nil")
-                state = .idle
-                errorMessage = "Failed to load video"
-                connectionInfo = "Idle"
-                return
-            }
-
-            fileURL = videoData.url
-            let attrs = try FileManager.default.attributesOfItem(atPath: videoData.url.path)
+            fileURL = exportedURL
+            let attrs = try FileManager.default.attributesOfItem(atPath: exportedURL.path)
             let fileSize = attrs[.size] as? Int64 ?? 0
             totalBytes = fileSize
-            selectedFileName = videoData.url.lastPathComponent
+            selectedFileName = resource.originalFilename
             errorMessage = nil
-            print("[UploadManager] File loaded: \(videoData.url.lastPathComponent), size: \(fileSize)")
+            preparationProgress = 1.0
+            print("[UploadManager] File exported: \(resource.originalFilename), size: \(fileSize)")
 
             // Auto-start the upload
             startUpload(serverURL: serverURL)
         } catch {
             state = .idle
-            errorMessage = "Failed to load video: \(error.localizedDescription)"
+            errorMessage = "Failed to read exported file: \(error.localizedDescription)"
             connectionInfo = "Idle"
-            print("[UploadManager] File load error: \(error)")
+            print("[UploadManager] File read error: \(error)")
         }
     }
 
@@ -882,22 +944,3 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
     }
 }
 
-// MARK: - Video File Transferable
-
-struct VideoFileTransferable: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { file in
-            SentTransferredFile(file.url)
-        } importing: { received in
-            // Move (not copy) the system temp file into our caches directory so it
-            // survives past this closure. A move is effectively instant (rename).
-            let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            let destination = caches.appendingPathComponent(received.file.lastPathComponent)
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: received.file, to: destination)
-            return VideoFileTransferable(url: destination)
-        }
-    }
-}
