@@ -419,8 +419,9 @@ class UploadManager: NSObject, ObservableObject {
                     let activeTasks = tasks.filter { $0.state == .running || $0.state == .suspended }
                     if activeTasks.isEmpty {
                         self.state = .paused
-                        self.connectionInfo = "Restored from previous session (offset \(self.currentOffset))"
-                        print("[UploadManager] Restored state, no active tasks. offset=\(self.currentOffset)")
+                        self.connectionInfo = "Restored from previous session, resuming..."
+                        print("[UploadManager] Restored state, no active tasks. Auto-resuming from offset=\(self.currentOffset)")
+                        self.resume()
                     } else {
                         self.state = .uploading
                         self.connectionInfo = "Background upload in progress..."
@@ -846,7 +847,7 @@ class UploadManager: NSObject, ObservableObject {
 
 extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate {
 
-    /// Intra-chunk progress — works for both foreground and background sessions
+    /// progress — works for both foreground and background sessions
     nonisolated func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
