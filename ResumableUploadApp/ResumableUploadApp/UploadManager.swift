@@ -692,21 +692,6 @@ class UploadManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - File Reading
-
-    private func readChunk(from sourceURL: URL, offset: Int64, length: Int64) -> Data? {
-        do {
-            let handle = try FileHandle(forReadingFrom: sourceURL)
-            defer { handle.closeFile() }
-            handle.seek(toFileOffset: UInt64(offset))
-            let data = handle.readData(ofLength: Int(length))
-            return data
-        } catch {
-            print("[UploadManager] Failed to read chunk: \(error)")
-            return nil
-        }
-    }
-
     // MARK: - State Persistence
 
     private struct PersistedUploadState: Codable {
