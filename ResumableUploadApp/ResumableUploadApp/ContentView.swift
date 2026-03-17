@@ -5,7 +5,6 @@ struct ContentView: View {
     @EnvironmentObject var uploadManager: UploadManager
     @State private var selectedItem: PhotosPickerItem?
     @State private var serverURL: String = "https://annie-uninitialled-untractably.ngrok-free.dev"
-    @State private var chunkSizeMB: Double = 1.0
 
     var body: some View {
         NavigationStack {
@@ -15,15 +14,6 @@ struct ContentView: View {
                         .textContentType(.URL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                }
-
-                Section("Configuration") {
-                    VStack(alignment: .leading) {
-                        Text("Chunk Size: \(Int(chunkSizeMB)) MB")
-                        Slider(value: $chunkSizeMB, in: 1...100, step: 1) {
-                            Text("Chunk Size")
-                        }
-                    }
                 }
 
                 Section("File") {
@@ -50,8 +40,7 @@ struct ContentView: View {
                     HStack(spacing: 16) {
                         Button("Upload") {
                             uploadManager.startUpload(
-                                serverURL: serverURL,
-                                chunkSizeMB: Int(chunkSizeMB)
+                                serverURL: serverURL
                             )
                         }
                         .disabled(!uploadManager.canStart)

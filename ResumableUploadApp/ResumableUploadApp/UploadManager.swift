@@ -34,12 +34,12 @@ enum UploadState: String {
 ///
 /// Uses a dual-session architecture:
 /// - **Foreground session**: lightweight protocol requests (POST, HEAD, DELETE)
-/// - **Background session**: PATCH chunk uploads that continue even when the app is suspended/killed
+/// - **Background session**: PATCH upload that continues even when the app is suspended/killed
 ///
 /// Upload flow:
 /// 1. POST to server with Upload-Incomplete: ?1 to create upload session and get resumption URL
-/// 2. PATCH chunks to resumption URL via background upload tasks (one at a time, delegate-driven)
-/// 3. On interruption: HEAD to get server offset, resume with PATCH
+/// 2. PATCH entire remaining file to resumption URL via a single background upload task
+/// 3. On failure: HEAD to get server offset, enqueue a new PATCH for the remaining bytes
 @MainActor
 class UploadManager: NSObject, ObservableObject {
     // MARK: - Published State
@@ -67,7 +67,6 @@ class UploadManager: NSObject, ObservableObject {
     /// The path portion of the resumption URL (e.g. /resumable_upload/12345-67890)
     private var resumptionPath: String?
     private var serverURL: String = ""
-    private var chunkSize: Int = 1_048_576
     private var isPaused = false
     private var isCancelled = false
     private var speedTimer: Timer?
@@ -94,7 +93,7 @@ class UploadManager: NSObject, ObservableObject {
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
 
-    /// Background session for PATCH chunk uploads — transfers continue even when app is suspended/killed
+    /// Background session for PATCH uploads — transfers continue even when app is suspended/killed
     private lazy var backgroundSession: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionID)
         config.isDiscretionary = false
@@ -107,34 +106,31 @@ class UploadManager: NSObject, ObservableObject {
 
     // MARK: - Temp File Management
 
-    private var chunkTempDirectory: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("upload_chunks")
+    private var remainderTempFile: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("upload_remainder.bin")
     }
 
-    private func writeChunkToTempFile(offset: Int64, length: Int64) -> URL? {
+    /// Write the remaining bytes from the given offset to a temp file for background upload.
+    /// Only needed when resuming from a non-zero offset; at offset 0 the original file is used directly.
+    private func writeRemainderToTempFile(offset: Int64) -> URL? {
         guard let fileURL else { return nil }
-        guard let chunkData = readChunk(from: fileURL, offset: offset, length: length) else { return nil }
+        guard let total = totalBytes, offset < total else { return nil }
 
-        let dir = chunkTempDirectory
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let length = total - offset
+        guard let data = readChunk(from: fileURL, offset: offset, length: length) else { return nil }
 
-        let tempFile = dir.appendingPathComponent("chunk_\(offset).bin")
+        let tempFile = remainderTempFile
         do {
-            try chunkData.write(to: tempFile)
+            try data.write(to: tempFile)
             return tempFile
         } catch {
-            print("[UploadManager] Failed to write temp chunk file: \(error)")
+            print("[UploadManager] Failed to write remainder temp file: \(error)")
             return nil
         }
     }
 
-    private func cleanupTempFile(_ url: URL) {
-        try? FileManager.default.removeItem(at: url)
-    }
-
-    private func cleanupAllTempChunks() {
-        let dir = chunkTempDirectory
-        try? FileManager.default.removeItem(at: dir)
+    private func cleanupTempFiles() {
+        try? FileManager.default.removeItem(at: remainderTempFile)
     }
 
     // MARK: - File Loading
@@ -170,11 +166,10 @@ class UploadManager: NSObject, ObservableObject {
 
     // MARK: - Upload Control
 
-    func startUpload(serverURL: String, chunkSizeMB: Int) {
+    func startUpload(serverURL: String) {
         guard fileURL != nil, state == .idle else { return }
 
         self.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
-        self.chunkSize = chunkSizeMB * 1_048_576
         self.bytesUploaded = 0
         self.currentOffset = 0
         self.progress = 0
@@ -183,7 +178,7 @@ class UploadManager: NSObject, ObservableObject {
         self.isCancelled = false
         self.resumptionPath = nil
 
-        cleanupAllTempChunks()
+        cleanupTempFiles()
 
         state = .creatingUpload
         connectionInfo = "Connecting..."
@@ -214,7 +209,7 @@ class UploadManager: NSObject, ObservableObject {
         guard resumptionPath != nil else {
             if fileURL != nil {
                 state = .idle
-                startUpload(serverURL: serverURL, chunkSizeMB: chunkSize / 1_048_576)
+                startUpload(serverURL: serverURL)
             }
             return
         }
@@ -251,14 +246,14 @@ class UploadManager: NSObject, ObservableObject {
         connectionInfo = "Cancelled"
         stopSpeedTracking()
         clearPersistedState()
-        cleanupAllTempChunks()
+        cleanupTempFiles()
         print("[UploadManager] Cancelled")
     }
 
     // MARK: - Background Session Reconnection
 
     func reconnectBackgroundSession() {
-        cleanupAllTempChunks()
+        cleanupTempFiles()
 
         // Touch the background session so it reconnects with the system daemon
         _ = backgroundSession
@@ -266,7 +261,6 @@ class UploadManager: NSObject, ObservableObject {
         if let saved = loadPersistedState() {
             resumptionPath = saved.resumptionPath
             serverURL = saved.serverURL
-            chunkSize = saved.chunkSize
             totalBytes = saved.totalBytes
             currentOffset = saved.currentOffset
             bytesUploaded = saved.currentOffset
@@ -376,16 +370,16 @@ class UploadManager: NSObject, ObservableObject {
             state = .uploading
             connectionInfo = "Upload session created"
 
-            enqueueNextChunk()
+            enqueueRemainingUpload()
         } catch {
             await setError("Connection failed: \(error.localizedDescription)")
         }
     }
 
-    /// Enqueue the next chunk as a background upload task.
-    /// This is synchronous (MainActor) — the delegate callback drives the loop.
-    private func enqueueNextChunk() {
-        guard fileURL != nil else {
+    /// Enqueue a single background upload task for all remaining bytes from currentOffset.
+    /// At offset 0 the original file is used directly; for retries a temp file is created.
+    private func enqueueRemainingUpload() {
+        guard let fileURL else {
             print("[UploadManager] No file URL")
             return
         }
@@ -398,7 +392,7 @@ class UploadManager: NSObject, ObservableObject {
             return
         }
         guard !isPaused, !isCancelled else {
-            print("[UploadManager] Upload paused or cancelled, stopping chunk loop")
+            print("[UploadManager] Upload paused or cancelled")
             return
         }
         guard currentOffset < total else {
@@ -414,31 +408,35 @@ class UploadManager: NSObject, ObservableObject {
         }
 
         let remaining = total - currentOffset
-        let thisChunkSize = min(Int64(chunkSize), remaining)
-        let isLastChunk = (currentOffset + thisChunkSize) >= total
 
-        print("[UploadManager] Enqueuing chunk: offset=\(currentOffset), size=\(thisChunkSize), isLast=\(isLastChunk)")
+        print("[UploadManager] Enqueuing upload: offset=\(currentOffset), remaining=\(remaining)")
         connectionInfo = "Uploading \(formatBytes(currentOffset))/\(formatBytes(total))..."
 
-        // Write chunk data to a temp file (background sessions require fromFile: uploads)
-        guard let tempFileURL = writeChunkToTempFile(offset: currentOffset, length: thisChunkSize) else {
-            state = .failed
-            errorMessage = "Failed to write chunk temp file at offset \(currentOffset)"
-            connectionInfo = "Error"
-            return
+        // At offset 0 use the original file directly; otherwise write remaining bytes to a temp file
+        let uploadFileURL: URL
+        if currentOffset == 0 {
+            uploadFileURL = fileURL
+        } else {
+            guard let tempURL = writeRemainderToTempFile(offset: currentOffset) else {
+                state = .failed
+                errorMessage = "Failed to write remainder temp file at offset \(currentOffset)"
+                connectionInfo = "Error"
+                return
+            }
+            uploadFileURL = tempURL
         }
 
         var request = URLRequest(url: patchURL)
         request.httpMethod = "PATCH"
         request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
         request.setValue("\(currentOffset)", forHTTPHeaderField: "Upload-Offset")
-        request.setValue(isLastChunk ? "?0" : "?1", forHTTPHeaderField: "Upload-Incomplete")
-        request.setValue("\(thisChunkSize)", forHTTPHeaderField: "Content-Length")
+        request.setValue("?0", forHTTPHeaderField: "Upload-Incomplete")
+        request.setValue("\(remaining)", forHTTPHeaderField: "Content-Length")
         request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue("close", forHTTPHeaderField: "Connection")
 
-        let task = backgroundSession.uploadTask(with: request, fromFile: tempFileURL)
-        task.taskDescription = "chunk_\(currentOffset)"
+        let task = backgroundSession.uploadTask(with: request, fromFile: uploadFileURL)
+        task.taskDescription = "upload_\(currentOffset)"
         currentBackgroundTask = task
         task.resume()
     }
@@ -475,7 +473,7 @@ class UploadManager: NSObject, ObservableObject {
                     connectionInfo = "Resumed from offset \(offset)"
                     persistState()
                     print("[UploadManager] Resumed at offset \(offset)")
-                    enqueueNextChunk()
+                    enqueueRemainingUpload()
                 } else {
                     await setError("No Upload-Offset in HEAD response")
                 }
@@ -517,7 +515,6 @@ class UploadManager: NSObject, ObservableObject {
         var filePath: String?
         var totalBytes: Int64
         var currentOffset: Int64
-        var chunkSize: Int
     }
 
     private func persistState() {
@@ -527,8 +524,7 @@ class UploadManager: NSObject, ObservableObject {
             serverURL: serverURL,
             filePath: fileURL?.path,
             totalBytes: totalBytes ?? 0,
-            currentOffset: currentOffset,
-            chunkSize: chunkSize
+            currentOffset: currentOffset
         )
         if let data = try? JSONEncoder().encode(persisted) {
             UserDefaults.standard.set(data, forKey: Self.stateKey)
@@ -602,7 +598,7 @@ class UploadManager: NSObject, ObservableObject {
         connectionInfo = "Upload complete"
         stopSpeedTracking()
         clearPersistedState()
-        cleanupAllTempChunks()
+        cleanupTempFiles()
         currentBackgroundTask = nil
 
         if let start = uploadStartTime {
@@ -653,20 +649,16 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
         }
     }
 
-    /// Main driver for background upload chain: called when each upload task completes.
-    /// Reads response headers, updates offset, and enqueues the next chunk (or completes).
+    /// Called when the background upload task completes (success or failure).
+    /// On success: completes the upload. On failure: queries server offset and retries.
     nonisolated func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
         MainActor.assumeIsolated {
-            // Clean up the temp file for this chunk
-            if let taskDesc = task.taskDescription,
-               taskDesc.hasPrefix("chunk_") {
-                let tempFile = chunkTempDirectory.appendingPathComponent("\(taskDesc).bin")
-                cleanupTempFile(tempFile)
-            }
+            // Clean up any temp remainder file
+            cleanupTempFiles()
 
             // If this was a cancellation (from pause or cancel), don't continue
             if let error = error as? NSError, error.code == NSURLErrorCancelled {
@@ -674,16 +666,16 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                 return
             }
 
-            // Handle network errors
+            // Handle network errors — query offset and retry
             if let error {
                 print("[UploadManager] Background task error: \(error)")
                 if !isPaused, !isCancelled {
-                    state = .failed
-                    errorMessage = "Upload failed: \(error.localizedDescription)"
-                    connectionInfo = "Error"
-                    stopSpeedTracking()
+                    connectionInfo = "Transfer interrupted, resuming..."
                     currentBackgroundTask = nil
-                    print("[UploadManager] ERROR: Upload failed: \(error.localizedDescription)")
+                    print("[UploadManager] Transfer interrupted, querying offset to retry")
+                    Task {
+                        await self.queryOffsetAndResume()
+                    }
                 }
                 return
             }
@@ -743,14 +735,16 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
             persistState()
             currentBackgroundTask = nil
 
-            print("[UploadManager] Chunk done, offset now: \(currentOffset)")
+            print("[UploadManager] Upload done, offset now: \(currentOffset)")
 
             guard let total = totalBytes else { return }
 
             if currentOffset >= total {
                 completeUpload()
             } else if !isPaused, !isCancelled {
-                enqueueNextChunk()
+                // Partial completion — server accepted less than we sent; retry remainder
+                connectionInfo = "Partial upload, resuming remainder..."
+                enqueueRemainingUpload()
             }
         }
     }
