@@ -116,34 +116,63 @@ class UploadManager: NSObject, ObservableObject {
     /// Write the remaining bytes from the given offset to a temp file for background upload.
     /// Only needed when resuming from a non-zero offset; at offset 0 the original file is used directly.
     /// Streams the copy with a fixed buffer to avoid loading the entire remainder into memory.
-    private func writeRemainderToTempFile(offset: Int64) -> URL? {
+    /// Write remaining bytes from offset to a temp file using POSIX I/O to avoid
+    /// Foundation's autorelease overhead that causes OOM on large files.
+    private func writeRemainderToTempFile(offset: Int64) async -> URL? {
         guard let fileURL else { return nil }
         guard let total = totalBytes, offset < total else { return nil }
 
         let tempFile = remainderTempFile
-        do {
-            let reader = try FileHandle(forReadingFrom: fileURL)
-            defer { reader.closeFile() }
-            reader.seek(toFileOffset: UInt64(offset))
+        let sourcePath = fileURL.path
+        let destPath = tempFile.path
 
-            FileManager.default.createFile(atPath: tempFile.path, contents: nil)
-            let writer = try FileHandle(forWritingTo: tempFile)
-            defer { writer.closeFile() }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let srcFd = open(sourcePath, O_RDONLY)
+                guard srcFd >= 0 else {
+                    print("[UploadManager] Failed to open source file for reading")
+                    continuation.resume(returning: nil)
+                    return
+                }
+                defer { close(srcFd) }
 
-            let bufferSize = 1_048_576 // 1MB
-            var remaining = total - offset
-            while remaining > 0 {
-                let toRead = min(Int64(bufferSize), remaining)
-                let chunk = reader.readData(ofLength: Int(toRead))
-                guard !chunk.isEmpty else { break }
-                writer.write(chunk)
-                remaining -= Int64(chunk.count)
+                // Seek to offset
+                lseek(srcFd, off_t(offset), SEEK_SET)
+
+                // Create/truncate destination file
+                let dstFd = open(destPath, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+                guard dstFd >= 0 else {
+                    print("[UploadManager] Failed to create temp file for writing")
+                    continuation.resume(returning: nil)
+                    return
+                }
+                defer { close(dstFd) }
+
+                let bufferSize = 1_048_576 // 1MB
+                let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 1)
+                defer { buffer.deallocate() }
+
+                var remaining = total - offset
+                while remaining > 0 {
+                    let toRead = min(Int64(bufferSize), remaining)
+                    let bytesRead = read(srcFd, buffer, Int(toRead))
+                    guard bytesRead > 0 else { break }
+
+                    var written = 0
+                    while written < bytesRead {
+                        let w = write(dstFd, buffer.advanced(by: written), bytesRead - written)
+                        guard w > 0 else {
+                            print("[UploadManager] Write error during temp file creation")
+                            continuation.resume(returning: nil)
+                            return
+                        }
+                        written += w
+                    }
+                    remaining -= Int64(bytesRead)
+                }
+
+                continuation.resume(returning: tempFile)
             }
-
-            return tempFile
-        } catch {
-            print("[UploadManager] Failed to write remainder temp file: \(error)")
-            return nil
         }
     }
 
@@ -476,7 +505,7 @@ class UploadManager: NSObject, ObservableObject {
             state = .uploading
             connectionInfo = "Upload session created"
 
-            enqueueRemainingUpload()
+            await enqueueRemainingUpload()
         } catch {
             await setError("Connection failed: \(error.localizedDescription)")
         }
@@ -529,21 +558,19 @@ class UploadManager: NSObject, ObservableObject {
     /// Enqueue a single background upload task for all remaining bytes from currentOffset.
     /// At offset 0 the original file is used directly; for retries a temp file is created.
     /// If the file is missing (app relaunched), re-exports from Photos first.
-    private func enqueueRemainingUpload() {
+    private func enqueueRemainingUpload() async {
         // If fileURL is missing, try to re-export from Photos
         if fileURL == nil, assetIdentifier != nil {
             connectionInfo = "Re-exporting from Photos..."
-            Task {
-                if let exportedURL = await exportAssetToFile() {
-                    fileURL = exportedURL
-                    selectedFileName = exportedURL.lastPathComponent
-                    persistState()
-                    enqueueRemainingUpload()
-                } else {
-                    state = .failed
-                    errorMessage = "Could not re-export video from Photos library"
-                    connectionInfo = "Error"
-                }
+            if let exportedURL = await exportAssetToFile() {
+                fileURL = exportedURL
+                selectedFileName = exportedURL.lastPathComponent
+                persistState()
+                await enqueueRemainingUpload()
+            } else {
+                state = .failed
+                errorMessage = "Could not re-export video from Photos library"
+                connectionInfo = "Error"
             }
             return
         }
@@ -579,14 +606,14 @@ class UploadManager: NSObject, ObservableObject {
         let remaining = total - currentOffset
 
         print("[UploadManager] Enqueuing upload: offset=\(currentOffset), remaining=\(remaining)")
-        connectionInfo = "Uploading \(formatBytes(currentOffset))/\(formatBytes(total))..."
 
         // At offset 0 use the original file directly; otherwise write remaining bytes to a temp file
         let uploadFileURL: URL
         if currentOffset == 0 {
             uploadFileURL = fileURL
         } else {
-            guard let tempURL = writeRemainderToTempFile(offset: currentOffset) else {
+            connectionInfo = "Preparing remaining \(formatBytes(remaining))..."
+            guard let tempURL = await writeRemainderToTempFile(offset: currentOffset) else {
                 state = .failed
                 errorMessage = "Failed to write remainder temp file at offset \(currentOffset)"
                 connectionInfo = "Error"
@@ -594,6 +621,8 @@ class UploadManager: NSObject, ObservableObject {
             }
             uploadFileURL = tempURL
         }
+
+        connectionInfo = "Uploading \(formatBytes(currentOffset))/\(formatBytes(total))..."
 
         var request = URLRequest(url: patchURL)
         request.httpMethod = "PATCH"
@@ -642,7 +671,7 @@ class UploadManager: NSObject, ObservableObject {
                     connectionInfo = "Resumed from offset \(offset)"
                     persistState()
                     print("[UploadManager] Resumed at offset \(offset)")
-                    enqueueRemainingUpload()
+                    await enqueueRemainingUpload()
                 } else {
                     await setError("No Upload-Offset in HEAD response")
                 }
@@ -926,7 +955,9 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
             } else if !isPaused, !isCancelled {
                 // Partial completion — server accepted less than we sent; retry remainder
                 connectionInfo = "Partial upload, resuming remainder..."
-                enqueueRemainingUpload()
+                Task {
+                    await enqueueRemainingUpload()
+                }
             }
         }
     }
