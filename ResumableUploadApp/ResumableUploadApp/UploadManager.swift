@@ -154,9 +154,12 @@ class UploadManager: NSObject, ObservableObject {
     func loadVideo(from item: PhotosPickerItem) async {
         state = .preparing
         connectionInfo = "Loading video..."
+        print("[UploadManager] Starting loadTransferable for item: \(item.itemIdentifier ?? "unknown")")
+        print("[UploadManager] Supported content types: \(item.supportedContentTypes)")
 
         do {
             guard let videoData = try await item.loadTransferable(type: VideoFileTransferable.self) else {
+                print("[UploadManager] loadTransferable returned nil")
                 state = .idle
                 errorMessage = "Failed to load video"
                 connectionInfo = "Idle"
@@ -273,6 +276,13 @@ class UploadManager: NSObject, ObservableObject {
 
         // Touch the background session so it reconnects with the system daemon
         _ = backgroundSession
+
+        backgroundSession.getAllTasks { tasks in
+            print("[Debug] Background tasks on reconnect: \(tasks.count)")
+            for t in tasks {
+                print("[Debug] Task: \(t.taskIdentifier) state=\(t.state.rawValue) request=\(t.originalRequest?.httpMethod ?? "?") \(t.originalRequest?.url?.path ?? "?")")
+            }
+        }
 
         if let saved = loadPersistedState() {
             resumptionPath = saved.resumptionPath
