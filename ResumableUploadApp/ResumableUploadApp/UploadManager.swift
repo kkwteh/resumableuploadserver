@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -57,7 +58,6 @@ class UploadManager: NSObject, ObservableObject {
 
     // MARK: - Computed
 
-    var canStart: Bool { state == .idle && fileURL != nil }
     var canPause: Bool { state == .uploading }
     var canResume: Bool { state == .paused || state == .failed }
     var canCancel: Bool { state == .uploading || state == .paused || state == .resuming }
@@ -65,6 +65,8 @@ class UploadManager: NSObject, ObservableObject {
     // MARK: - Internal State
 
     private var fileURL: URL?
+    /// PHAsset.localIdentifier for re-exporting from Photos library on failure/relaunch
+    private var assetIdentifier: String?
     /// The path portion of the resumption URL (e.g. /resumable_upload/12345-67890)
     private var resumptionPath: String?
     private var serverURL: String = ""
@@ -151,9 +153,15 @@ class UploadManager: NSObject, ObservableObject {
 
     // MARK: - File Loading
 
-    func loadVideo(from item: PhotosPickerItem) async {
+    /// Load a video from the PhotosPicker and immediately begin uploading.
+    /// Uses the temp URL provided by the system (no copy). Persists the PHAsset.localIdentifier
+    /// so the asset can be re-exported from Photos if the upload fails and the app relaunches.
+    func loadVideoAndUpload(from item: PhotosPickerItem, serverURL: String) async {
         state = .preparing
         connectionInfo = "Loading video..."
+
+        // Persist the asset identifier for re-export on failure/relaunch
+        assetIdentifier = item.itemIdentifier
         print("[UploadManager] Starting loadTransferable for item: \(item.itemIdentifier ?? "unknown")")
         print("[UploadManager] Supported content types: \(item.supportedContentTypes)")
 
@@ -171,10 +179,11 @@ class UploadManager: NSObject, ObservableObject {
             let fileSize = attrs[.size] as? Int64 ?? 0
             totalBytes = fileSize
             selectedFileName = videoData.url.lastPathComponent
-            state = .idle
-            connectionInfo = "File ready (\(formatBytes(fileSize)))"
             errorMessage = nil
             print("[UploadManager] File loaded: \(videoData.url.lastPathComponent), size: \(fileSize)")
+
+            // Auto-start the upload
+            startUpload(serverURL: serverURL)
         } catch {
             state = .idle
             errorMessage = "Failed to load video: \(error.localizedDescription)"
@@ -185,8 +194,8 @@ class UploadManager: NSObject, ObservableObject {
 
     // MARK: - Upload Control
 
-    func startUpload(serverURL: String) {
-        guard fileURL != nil, state == .idle else { return }
+    private func startUpload(serverURL: String) {
+        guard fileURL != nil else { return }
 
         self.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
         self.bytesUploaded = 0
@@ -266,6 +275,7 @@ class UploadManager: NSObject, ObservableObject {
         stopSpeedTracking()
         clearPersistedState()
         cleanupTempFiles()
+        assetIdentifier = nil
         print("[UploadManager] Cancelled")
     }
 
@@ -290,34 +300,42 @@ class UploadManager: NSObject, ObservableObject {
             totalBytes = saved.totalBytes
             currentOffset = saved.currentOffset
             bytesUploaded = saved.currentOffset
+            assetIdentifier = saved.assetIdentifier
 
-            if let path = saved.filePath, FileManager.default.fileExists(atPath: path) {
+            let fileExists = saved.filePath.map { FileManager.default.fileExists(atPath: $0) } ?? false
+
+            if fileExists, let path = saved.filePath {
                 fileURL = URL(fileURLWithPath: path)
                 selectedFileName = URL(fileURLWithPath: path).lastPathComponent
-                updateProgress()
+            } else if saved.assetIdentifier != nil {
+                // Temp file is gone (app relaunched), but we have the asset identifier.
+                // We'll re-export from Photos when the upload needs to retry.
+                print("[UploadManager] Temp file gone, will re-export from Photos on retry")
+            } else {
+                // No file and no asset identifier — can't recover
+                print("[UploadManager] No file and no asset identifier, clearing state")
+                clearPersistedState()
+                return
+            }
 
-                // Check if there are pending background tasks
-                backgroundSession.getAllTasks { [weak self] tasks in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        let activeTasks = tasks.filter { $0.state == .running || $0.state == .suspended }
-                        if activeTasks.isEmpty {
-                            // No pending tasks — last chunk may have completed while app was dead
-                            // Restore as paused so user can resume (HEAD will sync offset)
-                            self.state = .paused
-                            self.connectionInfo = "Restored from previous session (offset \(self.currentOffset))"
-                            print("[UploadManager] Restored state, no active tasks. offset=\(self.currentOffset)")
-                        } else {
-                            // Active tasks exist — delegate callbacks will drive them
-                            self.state = .uploading
-                            self.connectionInfo = "Background upload in progress..."
-                            self.startSpeedTracking()
-                            print("[UploadManager] Restored state, \(activeTasks.count) active background task(s)")
-                        }
+            updateProgress()
+
+            // Check if there are pending background tasks
+            backgroundSession.getAllTasks { [weak self] tasks in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let activeTasks = tasks.filter { $0.state == .running || $0.state == .suspended }
+                    if activeTasks.isEmpty {
+                        self.state = .paused
+                        self.connectionInfo = "Restored from previous session (offset \(self.currentOffset))"
+                        print("[UploadManager] Restored state, no active tasks. offset=\(self.currentOffset)")
+                    } else {
+                        self.state = .uploading
+                        self.connectionInfo = "Background upload in progress..."
+                        self.startSpeedTracking()
+                        print("[UploadManager] Restored state, \(activeTasks.count) active background task(s)")
                     }
                 }
-            } else {
-                clearPersistedState()
             }
         }
     }
@@ -402,9 +420,72 @@ class UploadManager: NSObject, ObservableObject {
         }
     }
 
+    /// Re-export the video from the Photos library using the persisted PHAsset.localIdentifier.
+    /// Used when the temp file is gone (e.g. app relaunched) but the upload needs to retry.
+    private func exportAssetToFile() async -> URL? {
+        guard let identifier = assetIdentifier else {
+            print("[UploadManager] No asset identifier for re-export")
+            return nil
+        }
+
+        let results = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+        guard let asset = results.firstObject else {
+            print("[UploadManager] PHAsset not found for identifier: \(identifier)")
+            return nil
+        }
+
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .video }) else {
+            print("[UploadManager] No video resource found for asset")
+            return nil
+        }
+
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let uploadsDir = docs.appendingPathComponent("pending_uploads")
+        try? FileManager.default.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
+        let destination = uploadsDir.appendingPathComponent(UUID().uuidString + "_" + resource.originalFilename)
+
+        // Remove any existing file at destination
+        try? FileManager.default.removeItem(at: destination)
+
+        print("[UploadManager] Re-exporting asset to: \(destination.lastPathComponent)")
+
+        return await withCheckedContinuation { continuation in
+            let options = PHAssetResourceRequestOptions()
+            options.isNetworkAccessAllowed = true
+            PHAssetResourceManager.default().writeData(for: resource, toFile: destination, options: options) { error in
+                if let error {
+                    print("[UploadManager] Asset export failed: \(error)")
+                    continuation.resume(returning: nil)
+                } else {
+                    print("[UploadManager] Asset export succeeded: \(destination.lastPathComponent)")
+                    continuation.resume(returning: destination)
+                }
+            }
+        }
+    }
+
     /// Enqueue a single background upload task for all remaining bytes from currentOffset.
     /// At offset 0 the original file is used directly; for retries a temp file is created.
+    /// If the file is missing (app relaunched), re-exports from Photos first.
     private func enqueueRemainingUpload() {
+        // If fileURL is missing, try to re-export from Photos
+        if fileURL == nil, assetIdentifier != nil {
+            connectionInfo = "Re-exporting from Photos..."
+            Task {
+                if let exportedURL = await exportAssetToFile() {
+                    fileURL = exportedURL
+                    selectedFileName = exportedURL.lastPathComponent
+                    persistState()
+                    enqueueRemainingUpload()
+                } else {
+                    state = .failed
+                    errorMessage = "Could not re-export video from Photos library"
+                    connectionInfo = "Error"
+                }
+            }
+            return
+        }
+
         guard let fileURL else {
             print("[UploadManager] No file URL")
             return
@@ -539,6 +620,7 @@ class UploadManager: NSObject, ObservableObject {
         var resumptionPath: String
         var serverURL: String
         var filePath: String?
+        var assetIdentifier: String?
         var totalBytes: Int64
         var currentOffset: Int64
     }
@@ -549,6 +631,7 @@ class UploadManager: NSObject, ObservableObject {
             resumptionPath: resumptionPath,
             serverURL: serverURL,
             filePath: fileURL?.path,
+            assetIdentifier: assetIdentifier,
             totalBytes: totalBytes ?? 0,
             currentOffset: currentOffset
         )
@@ -808,14 +891,12 @@ struct VideoFileTransferable: Transferable {
         FileRepresentation(contentType: .movie) { file in
             SentTransferredFile(file.url)
         } importing: { received in
-            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let uploadsDir = docs.appendingPathComponent("pending_uploads")
-            try FileManager.default.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
-
-            let destination = uploadsDir.appendingPathComponent(
-                UUID().uuidString + "_" + received.file.lastPathComponent
-            )
-            try FileManager.default.copyItem(at: received.file, to: destination)
+            // Move (not copy) the system temp file into our caches directory so it
+            // survives past this closure. A move is effectively instant (rename).
+            let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            let destination = caches.appendingPathComponent(received.file.lastPathComponent)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: received.file, to: destination)
             return VideoFileTransferable(url: destination)
         }
     }

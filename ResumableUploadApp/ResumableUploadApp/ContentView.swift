@@ -26,7 +26,7 @@ struct ContentView: View {
                     .onChange(of: selectedItem) { _, newItem in
                         guard let newItem else { return }
                         Task {
-                            await uploadManager.loadVideo(from: newItem)
+                            await uploadManager.loadVideoAndUpload(from: newItem, serverURL: serverURL)
                         }
                     }
 
@@ -38,13 +38,6 @@ struct ContentView: View {
 
                 Section("Controls") {
                     HStack(spacing: 16) {
-                        Button("Upload") {
-                            uploadManager.startUpload(
-                                serverURL: serverURL
-                            )
-                        }
-                        .disabled(!uploadManager.canStart)
-
                         Button("Pause") {
                             uploadManager.pause()
                         }
