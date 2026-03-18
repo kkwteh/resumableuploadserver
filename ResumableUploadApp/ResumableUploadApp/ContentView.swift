@@ -4,7 +4,7 @@ import PhotosUI
 struct ContentView: View {
     @EnvironmentObject var uploadManager: UploadManager
     @State private var selectedItem: PhotosPickerItem?
-    @State private var serverURL: String = "https://annie-uninitialled-untractably.ngrok-free.dev"
+    @State private var serverURL: String = "https://annie-uninitialled-untractably.ngrok-free.dev/files"
 
     var body: some View {
         NavigationStack {
