@@ -6,8 +6,8 @@ let package = Package(
     name: "UploadServer",
     platforms: [.macOS(.v13)],
     dependencies: [
-        .package(path: "../BuildingAResumableUploadServerWithSwiftNIO"),
-        .package(path: "../BuildingAResumableUploadServerWithSwiftNIO/Dependencies/swift-http-types"),
+        .package(path: "./BuildingAResumableUploadServerWithSwiftNIO"),
+        .package(path: "./BuildingAResumableUploadServerWithSwiftNIO/Dependencies/swift-http-types"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.53.0"),
     ],
     targets: [

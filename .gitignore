@@ -1,6 +1,5 @@
-UploadServer/.build/
-UploadServer/uploads/
+UploadServers/swift/.build/
+UploadServers/swift/uploads/
 ResumableUploadApp/ResumableUploadApp.xcodeproj/project.xcworkspace/xcuserdata/
 .DS_Store
 launch.json
-BuildingAResumableUploadServerWithSwiftNIO/Dependencies/swift-http-types/Package.resolved
