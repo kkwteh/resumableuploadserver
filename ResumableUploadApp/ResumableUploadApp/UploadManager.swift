@@ -94,7 +94,8 @@ class UploadManager: NSObject, ObservableObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 3600
-        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        config.waitsForConnectivity = true
+        return URLSession(configuration: config)
     }()
 
     /// Background session for PATCH uploads — transfers continue even when app is suspended/killed
@@ -314,6 +315,10 @@ class UploadManager: NSObject, ObservableObject {
     private func startUpload(serverURL: String) {
         guard fileURL != nil else { return }
 
+        currentBackgroundTask?.cancel()
+        currentBackgroundTask = nil
+        stopSpeedTracking()
+
         self.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
         self.bytesUploaded = 0
         self.currentOffset = 0
@@ -322,11 +327,11 @@ class UploadManager: NSObject, ObservableObject {
         self.isPaused = false
         self.isCancelled = false
         self.resumptionPath = nil
+        self.connectionInfo = "Connecting..."
 
         cleanupTempFiles()
 
         state = .creatingUpload
-        connectionInfo = "Connecting..."
         uploadStartTime = Date()
         startSpeedTracking()
 
@@ -495,7 +500,6 @@ class UploadManager: NSObject, ObservableObject {
         request.setValue("?1", forHTTPHeaderField: "Upload-Incomplete")
         request.setValue("0", forHTTPHeaderField: "Upload-Offset")
         request.setValue("0", forHTTPHeaderField: "Content-Length")
-        request.setValue("close", forHTTPHeaderField: "Connection")
 
         print("[UploadManager] POST \(uploadURL) to create upload session")
 
@@ -663,7 +667,6 @@ class UploadManager: NSObject, ObservableObject {
         request.setValue("?0", forHTTPHeaderField: "Upload-Incomplete")
         request.setValue("\(remaining)", forHTTPHeaderField: "Content-Length")
         request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
-        request.setValue("close", forHTTPHeaderField: "Connection")
 
         let task = backgroundSession.uploadTask(with: request, fromFile: uploadFileURL)
         task.taskDescription = "upload_\(currentOffset)"
@@ -817,6 +820,9 @@ class UploadManager: NSObject, ObservableObject {
         clearPersistedState()
         cleanupTempFiles()
         cleanupExportedFile()
+        resumptionPath = nil
+        assetIdentifier = nil
+        fileURL = nil
         currentBackgroundTask = nil
 
         if let start = uploadStartTime {
@@ -886,6 +892,9 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
         didCompleteWithError error: Error?
     ) {
         MainActor.assumeIsolated {
+            guard session.configuration.identifier == Self.backgroundSessionID else { return }
+            guard task.originalRequest?.httpMethod == "PATCH" else { return }
+
             // Clean up any temp remainder file
             cleanupTempFiles()
 
@@ -920,10 +929,6 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                 }
                 return
             }
-
-            // Only process PATCH responses
-            guard task.originalRequest?.httpMethod == "PATCH" else { return }
-
             guard let httpResponse = task.response as? HTTPURLResponse else {
                 state = .failed
                 errorMessage = "Invalid server response for background PATCH"
@@ -1006,4 +1011,3 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
         }
     }
 }
-
