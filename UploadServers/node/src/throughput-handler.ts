@@ -35,7 +35,7 @@ export function handleUploadBody(
 
   req.on("data", (chunk: Buffer) => {
     bytesReceived += chunk.length;
-    stream.write(chunk);
+    const canContinue = stream.write(chunk);
 
     const now = Date.now();
     if (now - lastLogTime >= LOG_INTERVAL_MS) {
@@ -47,6 +47,14 @@ export function handleUploadBody(
       );
       lastLogTime = now;
     }
+
+    if (!canContinue) {
+      req.pause();
+    }
+  });
+
+  stream.on("drain", () => {
+    req.resume();
   });
 
   req.on("end", () => {
