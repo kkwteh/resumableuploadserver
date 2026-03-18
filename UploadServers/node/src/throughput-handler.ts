@@ -56,7 +56,7 @@ export function handleUploadBody(
       const speedMBps =
         elapsed > 0 ? bytesReceived / elapsed / 1_048_576 : 0;
       console.log(
-        `[Upload] Chunk complete: ${formatBytes(totalBytes)} total (${formatBytes(bytesReceived)} this chunk) in ${elapsed.toFixed(2)}s (${speedMBps.toFixed(1)} MB/s) -> ${upload.filePath}`
+        `[Upload] Request complete: ${formatBytes(totalBytes)} total (${formatBytes(bytesReceived)} this request) in ${elapsed.toFixed(2)}s (${speedMBps.toFixed(1)} MB/s) -> ${upload.filePath}`
       );
       onDone(bytesReceived);
     });
