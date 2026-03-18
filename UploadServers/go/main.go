@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -33,17 +32,16 @@ type upload struct {
 
 // uploadManager holds all active uploads.
 type uploadManager struct {
-	mu      sync.Mutex
 	origin  string
 	storage Storage
-	uploads map[string]*upload
+	store   UploadStore
 }
 
-func newUploadManager(origin string, storage Storage) *uploadManager {
+func newUploadManager(origin string, storage Storage, store UploadStore) *uploadManager {
 	return &uploadManager{
 		origin:  origin,
 		storage: storage,
-		uploads: make(map[string]*upload),
+		store:   store,
 	}
 }
 
@@ -61,47 +59,42 @@ func (m *uploadManager) create(ctx context.Context) (*upload, error) {
 		return nil, err
 	}
 
-	m.mu.Lock()
-	m.uploads[token] = u
-	m.mu.Unlock()
-
-	// Idle timeout
-	u.timer = time.AfterFunc(idleTimeout, func() {
-		fmt.Printf("[Upload] Timeout: removing upload %s after idle\n", token)
-		m.storage.Abort(context.Background(), u)
-		m.mu.Lock()
-		delete(m.uploads, token)
-		m.mu.Unlock()
-	})
+	if err := m.store.Create(ctx, u); err != nil {
+		return nil, err
+	}
 
 	return u, nil
 }
 
-func (m *uploadManager) find(path string) *upload {
+func (m *uploadManager) find(ctx context.Context, path string) *upload {
 	if !strings.HasPrefix(path, resumePrefix) {
 		return nil
 	}
 	token := path[len(resumePrefix):]
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.uploads[token]
+	u, err := m.store.Find(ctx, token)
+	if err != nil {
+		fmt.Printf("[Upload] Store find error: %s\n", err)
+		return nil
+	}
+	return u
 }
 
-func (m *uploadManager) remove(path string) {
+func (m *uploadManager) remove(ctx context.Context, path string) {
 	if !strings.HasPrefix(path, resumePrefix) {
 		return
 	}
 	token := path[len(resumePrefix):]
-	m.mu.Lock()
-	u := m.uploads[token]
-	if u != nil {
-		if u.timer != nil {
-			u.timer.Stop()
-		}
-		m.storage.Abort(context.Background(), u)
-		delete(m.uploads, token)
+	u, err := m.store.Find(ctx, token)
+	if err != nil {
+		fmt.Printf("[Upload] Store find error: %s\n", err)
+		return
 	}
-	m.mu.Unlock()
+	if u != nil {
+		m.storage.Abort(context.Background(), u)
+		if err := m.store.Delete(ctx, token); err != nil {
+			fmt.Printf("[Upload] Store delete error: %s\n", err)
+		}
+	}
 }
 
 func (u *upload) resumePath() string {
@@ -169,7 +162,21 @@ func main() {
 		fmt.Println("Storage: local disk")
 	}
 
-	mgr := newUploadManager(cfg.Origin, storage)
+	var store UploadStore
+	if cfg.UseRedis() {
+		rs, err := NewRedisStore(cfg.RedisURL, idleTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to connect to Redis: %s\n", err)
+			os.Exit(1)
+		}
+		store = rs
+		fmt.Printf("State: Redis (%s)\n", cfg.RedisURL)
+	} else {
+		store = NewMemoryStore(storage)
+		fmt.Println("State: in-memory")
+	}
+
+	mgr := newUploadManager(cfg.Origin, storage, store)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		interop := r.Header.Get("Upload-Draft-Interop-Version")
@@ -198,7 +205,7 @@ func main() {
 
 		// Resumption path requests
 		if strings.HasPrefix(urlPath, resumePrefix) {
-			u := mgr.find(urlPath)
+			u := mgr.find(ctx, urlPath)
 			if u == nil {
 				setCommonHeaders(w)
 				w.Header().Set("Content-Length", "0")
@@ -260,8 +267,14 @@ func main() {
 						w.WriteHeader(500)
 						return
 					}
+					if err := mgr.store.Delete(ctx, u.token); err != nil {
+						fmt.Printf("[Upload] Store delete error: %s\n", err)
+					}
 					sendUploadComplete(w, u, mgr.storage)
 				} else {
+					if err := mgr.store.Save(ctx, u); err != nil {
+						fmt.Printf("[Upload] Store save error: %s\n", err)
+					}
 					setCommonHeaders(w)
 					w.Header().Set("Upload-Incomplete", "?1")
 					w.Header().Set("Upload-Offset", strconv.FormatInt(u.offset, 10))
@@ -275,7 +288,7 @@ func main() {
 					w.WriteHeader(400)
 					return
 				}
-				mgr.remove(urlPath)
+				mgr.remove(ctx, urlPath)
 				setCommonHeaders(w)
 				w.WriteHeader(204)
 
@@ -325,8 +338,14 @@ func main() {
 					w.WriteHeader(500)
 					return
 				}
+				if err := mgr.store.Delete(ctx, u.token); err != nil {
+					fmt.Printf("[Upload] Store delete error: %s\n", err)
+				}
 				sendUploadComplete(w, u, mgr.storage)
 			} else {
+				if err := mgr.store.Save(ctx, u); err != nil {
+					fmt.Printf("[Upload] Store save error: %s\n", err)
+				}
 				setCommonHeaders(w)
 				w.Header().Set("Location", cfg.Origin+u.resumePath())
 				w.Header().Set("Upload-Incomplete", "?1")

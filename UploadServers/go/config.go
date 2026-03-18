@@ -19,10 +19,15 @@ type Config struct {
 	S3Endpoint  string
 	S3PartSize  int
 	AWSRegion   string
+	RedisURL    string
 }
 
 func (c Config) UseS3() bool {
 	return c.S3Bucket != ""
+}
+
+func (c Config) UseRedis() bool {
+	return c.RedisURL != ""
 }
 
 func LoadConfig() Config {
@@ -59,5 +64,6 @@ func LoadConfig() Config {
 		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
 		S3PartSize:  partSize,
 		AWSRegion:   region,
+		RedisURL:    os.Getenv("REDIS_URL"),
 	}
 }
