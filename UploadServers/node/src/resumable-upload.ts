@@ -1,77 +1,66 @@
-import crypto from "node:crypto";
-import path from "node:path";
-
-const UPLOADS_DIR = "uploads";
-const RESUME_PATH_PREFIX = "/resumable_upload/";
-
-export type Upload = {
-  token: string;
-  resumePath: string;
-  filePath: string;
-  offset: number;
-  complete: boolean;
-  startTime: number;
-  cancel: () => void;
-};
+import { createUpload, getResumePath, getTokenFromPath, type Upload } from "./upload.js";
+import type { Storage } from "./storage.js";
+import type { UploadStore } from "./upload-store.js";
 
 export class ResumableUploadManager {
-  private origin: string;
-  private uploads = new Map<string, Upload>();
-  private timeoutMs: number;
+  constructor(
+    private readonly storage: Storage,
+    private readonly store: UploadStore,
+    private readonly timeoutMs: number
+  ) {}
 
-  constructor(origin: string, timeoutMs = 3600_000) {
-    this.origin = origin;
-    this.timeoutMs = timeoutMs;
-  }
-
-  create(): Upload {
-    const token = `${crypto.randomInt(2 ** 48 - 1)}-${crypto.randomInt(2 ** 48 - 1)}`;
-    const resumePath = `${RESUME_PATH_PREFIX}${token}`;
-    const filePath = path.join(UPLOADS_DIR, `${crypto.randomUUID()}`);
-
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-
-    const upload: Upload = {
-      token,
-      resumePath,
-      filePath,
-      offset: 0,
-      complete: false,
-      startTime: Date.now(),
-      cancel: () => {
-        if (timeout) clearTimeout(timeout);
-      },
-    };
-
-    // Start idle timeout — remove upload if no activity for the timeout period
-    const resetTimeout = () => {
-      if (timeout) clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        console.log(
-          `[Upload] Timeout: removing upload ${token} after ${this.timeoutMs}ms idle`
-        );
-        this.uploads.delete(token);
-      }, this.timeoutMs);
-    };
-    resetTimeout();
-
-    this.uploads.set(token, upload);
+  async create(): Promise<Upload> {
+    const upload = createUpload();
+    await this.storage.init(upload);
+    await this.store.create(upload);
     return upload;
   }
 
-  find(urlPath: string): Upload | undefined {
-    if (!urlPath.startsWith(RESUME_PATH_PREFIX)) return undefined;
-    const token = urlPath.slice(RESUME_PATH_PREFIX.length);
-    return this.uploads.get(token);
+  async find(urlPath: string): Promise<Upload | undefined> {
+    const token = getTokenFromPath(urlPath);
+    if (token === undefined) {
+      return undefined;
+    }
+
+    const upload = await this.store.find(token);
+    if (upload?.timer !== undefined) {
+      clearTimeout(upload.timer);
+      upload.timer = setTimeout(() => {
+        console.log(
+          `[Upload] Timeout: removing upload ${upload.token} after idle`
+        );
+        void this.storage.abort(upload);
+        void this.store.delete(upload.token);
+      }, this.timeoutMs);
+    }
+
+    return upload;
   }
 
-  remove(urlPath: string): void {
-    if (!urlPath.startsWith(RESUME_PATH_PREFIX)) return;
-    const token = urlPath.slice(RESUME_PATH_PREFIX.length);
-    const upload = this.uploads.get(token);
-    if (upload) {
-      upload.cancel();
-      this.uploads.delete(token);
+  async save(upload: Upload): Promise<void> {
+    await this.store.save(upload);
+  }
+
+  async delete(upload: Upload): Promise<void> {
+    await this.store.delete(upload.token);
+  }
+
+  async remove(urlPath: string): Promise<void> {
+    const token = getTokenFromPath(urlPath);
+    if (token === undefined) {
+      return;
     }
+
+    const upload = await this.store.find(token);
+    if (upload === undefined) {
+      return;
+    }
+
+    await this.storage.abort(upload);
+    await this.store.delete(token);
+  }
+
+  getResumePath(upload: Upload): string {
+    return getResumePath(upload.token);
   }
 }
