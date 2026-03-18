@@ -1,5 +1,8 @@
 UploadServers/swift/.build/
 UploadServers/swift/uploads/
+UploadServers/node/node_modules/
+UploadServers/node/uploads/
+UploadServers/node/dist/
 ResumableUploadApp/ResumableUploadApp.xcodeproj/project.xcworkspace/xcuserdata/
 .DS_Store
 launch.json
