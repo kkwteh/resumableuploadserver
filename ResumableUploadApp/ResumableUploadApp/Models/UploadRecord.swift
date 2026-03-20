@@ -24,6 +24,8 @@ struct UploadRecord: Codable, Identifiable, Equatable, Sendable {
     var responseStatusCode: Int?
     var errorDescription: String?
     var resumeDataFileName: String?
+    var resumableUploadURL: String?
+    var lastKnownServerOffset: Int64?
     var lastUpdatedAt: Date
 
     var progressFraction: Double? {

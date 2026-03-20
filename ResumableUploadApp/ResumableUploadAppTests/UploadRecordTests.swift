@@ -18,6 +18,8 @@ final class UploadRecordTests: XCTestCase {
             responseStatusCode: nil,
             errorDescription: nil,
             resumeDataFileName: nil,
+            resumableUploadURL: nil,
+            lastKnownServerOffset: nil,
             lastUpdatedAt: .now
         )
 
@@ -40,6 +42,8 @@ final class UploadRecordTests: XCTestCase {
             responseStatusCode: nil,
             errorDescription: nil,
             resumeDataFileName: "resume.bin",
+            resumableUploadURL: "https://example.com/files/upload-123",
+            lastKnownServerOffset: 1_024,
             lastUpdatedAt: .now
         )
 
@@ -53,5 +57,29 @@ final class UploadRecordTests: XCTestCase {
         let decoded = try decoder.decode(UploadRecord.self, from: data)
 
         XCTAssertEqual(decoded, source)
+    }
+
+    func testFailedUploadCanResumeWithOnlyNativeResumeData() {
+        let record = UploadRecord(
+            id: UUID(),
+            createdAt: .now,
+            fileName: "movie.mp4",
+            endpoint: "https://example.com/upload",
+            authToken: nil,
+            localFilePath: nil,
+            fileSize: 2_048,
+            state: .failed,
+            taskIdentifier: nil,
+            bytesSent: 1_024,
+            expectedBytes: 2_048,
+            responseStatusCode: nil,
+            errorDescription: "networkConnectionLost",
+            resumeDataFileName: "resume.bin",
+            resumableUploadURL: "https://example.com/files/upload-123",
+            lastKnownServerOffset: 1_024,
+            lastUpdatedAt: .now
+        )
+
+        XCTAssertTrue(record.canResume)
     }
 }
