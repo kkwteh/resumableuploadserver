@@ -31,17 +31,13 @@ enum UploadState: String {
     }
 }
 
-/// Manages resumable file uploads using the HTTP Resumable Upload protocol
-/// (draft-ietf-httpbis-resumable-upload-01).
-///
-/// Uses a dual-session architecture:
-/// - **Foreground session**: lightweight protocol requests (POST, HEAD, DELETE)
-/// - **Background session**: PATCH upload that continues even when the app is suspended/killed
+/// Manages resumable file uploads using URLSession's native resumable upload support.
 ///
 /// Upload flow:
-/// 1. POST to server with Upload-Incomplete: ?1 to create upload session and get resumption URL
-/// 2. PATCH entire remaining file to resumption URL via a single background upload task
-/// 3. On failure: HEAD to get server offset, enqueue a new PATCH for the remaining bytes
+/// 1. Start a single background upload task from the exported video file
+/// 2. Pause with cancelByProducingResumeData
+/// 3. Resume with uploadTask(withResumeData:)
+/// 4. On interruption, retry automatically from URLError.uploadTaskResumeData when available
 @MainActor
 class UploadManager: NSObject, ObservableObject {
     // MARK: - Published State
@@ -68,8 +64,6 @@ class UploadManager: NSObject, ObservableObject {
     private var fileURL: URL?
     /// PHAsset.localIdentifier for re-exporting from Photos library on failure/relaunch
     private var assetIdentifier: String?
-    /// The path portion of the resumption URL (e.g. /resumable_upload/12345-67890)
-    private var resumptionPath: String?
     private var serverURL: String = ""
     private var authToken: String?
     private var isPaused = false
@@ -81,6 +75,12 @@ class UploadManager: NSObject, ObservableObject {
 
     /// Tracks the current background upload task so we can cancel it on pause
     private var currentBackgroundTask: URLSessionUploadTask?
+    /// Native resume blob produced by URLSession when the upload is paused or interrupted
+    private var resumeData: Data?
+    /// Resume URL advertised by the server in the 104 informational response
+    private var resumeURL: URL?
+    /// Estimated uploaded bytes before the current task started sending body data
+    private var progressBaseBytes: Int64 = 0
 
     private static let stateKey = "ResumableUploadState"
     private static let backgroundSessionID = "com.resumableupload.background"
@@ -110,78 +110,7 @@ class UploadManager: NSObject, ObservableObject {
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
 
-    // MARK: - Temp File Management
-
-    private var remainderTempFile: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("upload_remainder.bin")
-    }
-
-    /// Write the remaining bytes from the given offset to a temp file for background upload.
-    /// Only needed when resuming from a non-zero offset; at offset 0 the original file is used directly.
-    /// Streams the copy with a fixed buffer to avoid loading the entire remainder into memory.
-    /// Write remaining bytes from offset to a temp file using POSIX I/O to avoid
-    /// Foundation's autorelease overhead that causes OOM on large files.
-    private func writeRemainderToTempFile(offset: Int64) async -> URL? {
-        guard let fileURL else { return nil }
-        guard let total = totalBytes, offset < total else { return nil }
-
-        let tempFile = remainderTempFile
-        let sourcePath = fileURL.path
-        let destPath = tempFile.path
-
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let srcFd = open(sourcePath, O_RDONLY)
-                guard srcFd >= 0 else {
-                    print("[UploadManager] Failed to open source file for reading")
-                    continuation.resume(returning: nil)
-                    return
-                }
-                defer { close(srcFd) }
-
-                // Seek to offset
-                lseek(srcFd, off_t(offset), SEEK_SET)
-
-                // Create/truncate destination file
-                let dstFd = open(destPath, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-                guard dstFd >= 0 else {
-                    print("[UploadManager] Failed to create temp file for writing")
-                    continuation.resume(returning: nil)
-                    return
-                }
-                defer { close(dstFd) }
-
-                let bufferSize = 1_048_576 // 1MB
-                let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 1)
-                defer { buffer.deallocate() }
-
-                var remaining = total - offset
-                while remaining > 0 {
-                    let toRead = min(Int64(bufferSize), remaining)
-                    let bytesRead = read(srcFd, buffer, Int(toRead))
-                    guard bytesRead > 0 else { break }
-
-                    var written = 0
-                    while written < bytesRead {
-                        let w = write(dstFd, buffer.advanced(by: written), bytesRead - written)
-                        guard w > 0 else {
-                            print("[UploadManager] Write error during temp file creation")
-                            continuation.resume(returning: nil)
-                            return
-                        }
-                        written += w
-                    }
-                    remaining -= Int64(bytesRead)
-                }
-
-                continuation.resume(returning: tempFile)
-            }
-        }
-    }
-
-    private func cleanupTempFiles() {
-        try? FileManager.default.removeItem(at: remainderTempFile)
-    }
+    // MARK: - File Management
 
     /// Remove the exported file from Documents/pending_uploads/ if it exists there.
     private func cleanupExportedFile() {
@@ -319,6 +248,9 @@ class UploadManager: NSObject, ObservableObject {
 
         currentBackgroundTask?.cancel()
         currentBackgroundTask = nil
+        resumeData = nil
+        resumeURL = nil
+        progressBaseBytes = 0
         stopSpeedTracking()
 
         self.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
@@ -328,52 +260,58 @@ class UploadManager: NSObject, ObservableObject {
         self.errorMessage = nil
         self.isPaused = false
         self.isCancelled = false
-        self.resumptionPath = nil
         self.connectionInfo = "Connecting..."
-
-        cleanupTempFiles()
 
         state = .creatingUpload
         uploadStartTime = Date()
         startSpeedTracking()
 
-        Task {
-            await createUploadSession()
-        }
+        enqueueInitialUpload()
     }
 
     func pause() {
         guard state == .uploading else { return }
+        guard let task = currentBackgroundTask else { return }
+
         isPaused = true
         state = .paused
-        connectionInfo = "Paused at offset \(currentOffset)"
+        connectionInfo = "Pausing..."
         stopSpeedTracking()
-
-        // Cancel the current background upload task; didCompleteWithError will detect cancellation
-        currentBackgroundTask?.cancel()
         currentBackgroundTask = nil
+        progressBaseBytes = bytesUploaded
 
-        print("[UploadManager] Paused at offset \(currentOffset)")
+        task.cancel(byProducingResumeData: { [weak self] data in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.resumeData = data
+                self.currentOffset = self.bytesUploaded
+                self.persistState()
+
+                if data == nil {
+                    self.state = .failed
+                    self.errorMessage = "Pause failed because the server did not return resume data"
+                    self.connectionInfo = "Pause failed"
+                    print("[UploadManager] Pause failed: no resume data")
+                    return
+                }
+
+                self.connectionInfo = "Paused at offset \(self.currentOffset)"
+                print("[UploadManager] Paused at offset \(self.currentOffset)")
+            }
+        })
     }
 
     func resume() {
         guard state == .paused || state == .failed else { return }
-        guard resumptionPath != nil else {
-            if fileURL != nil {
-                state = .idle
-                startUpload(serverURL: serverURL)
-            }
-            return
-        }
 
         isPaused = false
         isCancelled = false
         state = .resuming
-        connectionInfo = "Checking server offset..."
+        connectionInfo = "Resuming..."
         startSpeedTracking()
 
         Task {
-            await queryOffsetAndResume()
+            await resumeUpload()
         }
     }
 
@@ -382,36 +320,25 @@ class UploadManager: NSObject, ObservableObject {
         isCancelled = true
         isPaused = false
 
-        // Cancel any in-flight background tasks
         currentBackgroundTask?.cancel()
         currentBackgroundTask = nil
-
-        // Send DELETE to cancel server-side via foreground session
-        if let url = buildResumptionURL() {
-            var request = URLRequest(url: url)
-            request.httpMethod = "DELETE"
-            request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
-            if let authToken {
-                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-            }
-            foregroundSession.dataTask(with: request).resume()
-        }
+        resumeData = nil
+        deleteServerUploadIfPossible()
 
         state = .cancelled
         connectionInfo = "Cancelled"
         stopSpeedTracking()
         clearPersistedState()
-        cleanupTempFiles()
         cleanupExportedFile()
         assetIdentifier = nil
+        resumeURL = nil
+        progressBaseBytes = 0
         print("[UploadManager] Cancelled")
     }
 
     // MARK: - Background Session Reconnection
 
     func reconnectBackgroundSession() {
-        cleanupTempFiles()
-
         // Touch the background session so it reconnects with the system daemon
         _ = backgroundSession
 
@@ -423,14 +350,18 @@ class UploadManager: NSObject, ObservableObject {
         }
 
         if let saved = loadPersistedState() {
-            // Has persisted state — proceed with reconnection
-            resumptionPath = saved.resumptionPath
             serverURL = saved.serverURL
             totalBytes = saved.totalBytes
             currentOffset = saved.currentOffset
             bytesUploaded = saved.currentOffset
             assetIdentifier = saved.assetIdentifier
             authToken = saved.authToken
+            resumeData = saved.resumeData
+            progressBaseBytes = saved.currentOffset
+            if let resumeURLString = saved.resumeURL,
+               let parsedResumeURL = URL(string: resumeURLString) {
+                resumeURL = parsedResumeURL
+            }
 
             let fileExists = saved.filePath.map { FileManager.default.fileExists(atPath: $0) } ?? false
 
@@ -448,19 +379,30 @@ class UploadManager: NSObject, ObservableObject {
                 return
             }
 
-            updateProgress()
+            updateProgress(uploadedBytes: saved.currentOffset)
 
             // Check if there are pending background tasks
             backgroundSession.getAllTasks { [weak self] tasks in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let activeTasks = tasks.filter { $0.state == .running || $0.state == .suspended }
+                    let activeTasks = tasks.compactMap { $0 as? URLSessionUploadTask }
+                        .filter { $0.state == .running || $0.state == .suspended }
                     if activeTasks.isEmpty {
-                        self.state = .paused
-                        self.connectionInfo = "Restored from previous session, resuming..."
-                        print("[UploadManager] Restored state, no active tasks. Auto-resuming from offset=\(self.currentOffset)")
-                        self.resume()
+                        self.currentBackgroundTask = nil
+                        if self.resumeData != nil {
+                            self.state = .paused
+                            self.connectionInfo = "Restored paused upload"
+                            print("[UploadManager] Restored paused upload at offset=\(self.currentOffset)")
+                        } else {
+                            self.state = .failed
+                            self.connectionInfo = "Upload interrupted, restart required"
+                            self.errorMessage = "No active background task or native resume data was available"
+                            print("[UploadManager] Restored state without an active task or resume data")
+                        }
                     } else {
+                        let activeTask = activeTasks[0]
+                        self.currentBackgroundTask = activeTask
+                        self.progressBaseBytes = self.parseTaskBaseOffset(from: activeTask.taskDescription) ?? saved.currentOffset
                         self.state = .uploading
                         self.connectionInfo = "Background upload in progress..."
                         self.startSpeedTracking()
@@ -474,90 +416,8 @@ class UploadManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - URL Building
-
-    /// Build the full resumption URL from the server URL + resumption path.
-    private func buildResumptionURL() -> URL? {
-        guard let resumptionPath else { return nil }
-        guard var components = URLComponents(string: serverURL) else { return nil }
-        components.path = resumptionPath
-        return components.url
-    }
-
-    // MARK: - Upload Protocol Implementation
-
-    /// Step 1: POST to create upload session and get resumption URL (foreground session)
-    private func createUploadSession() async {
-        guard let uploadBaseURL = URL(string: serverURL) else {
-            await setError("Invalid server URL")
-            return
-        }
-
-        let uploadURL: URL
-        if uploadBaseURL.path.isEmpty || uploadBaseURL.path == "/" {
-            uploadURL = uploadBaseURL.appendingPathComponent("upload")
-        } else {
-            uploadURL = uploadBaseURL
-        }
-
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "POST"
-        request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
-        request.setValue("?1", forHTTPHeaderField: "Upload-Incomplete")
-        request.setValue("0", forHTTPHeaderField: "Upload-Offset")
-        request.setValue("0", forHTTPHeaderField: "Content-Length")
-        if let authToken {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-        }
-
-        print("[UploadManager] POST \(uploadURL) to create upload session")
-
-        do {
-            let (_, response) = try await foregroundSession.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                await setError("Invalid response from server")
-                return
-            }
-
-            print("[UploadManager] POST response: \(httpResponse.statusCode)")
-            print("[UploadManager] Headers: \(httpResponse.allHeaderFields)")
-
-            guard (200...299).contains(httpResponse.statusCode) else {
-                await setError("Server returned \(httpResponse.statusCode)")
-                return
-            }
-
-            guard let location = httpResponse.value(forHTTPHeaderField: "Location") else {
-                await setError("No Location header in upload creation response")
-                return
-            }
-
-            if let locationURL = URL(string: location) {
-                resumptionPath = locationURL.path
-            } else {
-                resumptionPath = location
-            }
-
-            print("[UploadManager] Resumption path: \(resumptionPath ?? "nil")")
-
-            if let offsetStr = httpResponse.value(forHTTPHeaderField: "Upload-Offset"),
-               let offset = Int64(offsetStr) {
-                currentOffset = offset
-            }
-
-            persistState()
-            state = .uploading
-            connectionInfo = "Upload session created"
-
-            await enqueueRemainingUpload()
-        } catch {
-            await setError("Connection failed: \(error.localizedDescription)")
-        }
-    }
-
     /// Re-export the video from the Photos library using the persisted PHAsset.localIdentifier.
-    /// Used when the temp file is gone (e.g. app relaunched) but the upload needs to retry.
+    /// Used when the exported file is gone (e.g. app relaunched) but the upload needs to restart.
     private func exportAssetToFile() async -> URL? {
         guard let identifier = assetIdentifier else {
             print("[UploadManager] No asset identifier for re-export")
@@ -600,168 +460,101 @@ class UploadManager: NSObject, ObservableObject {
         }
     }
 
-    /// Enqueue a single background upload task for all remaining bytes from currentOffset.
-    /// At offset 0 the original file is used directly; for retries a temp file is created.
-    /// If the file is missing (app relaunched), re-exports from Photos first.
-    private func enqueueRemainingUpload() async {
-        // If fileURL is missing, try to re-export from Photos
+    private func enqueueInitialUpload() {
+        guard let fileURL else { return }
+        guard let uploadURL = buildUploadURL() else {
+            Task {
+                await setError("Invalid server URL")
+            }
+            return
+        }
+
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
+        request.setValue("?0", forHTTPHeaderField: "Upload-Incomplete")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        let task = backgroundSession.uploadTask(with: request, fromFile: fileURL)
+        task.taskDescription = makeTaskDescription(baseOffset: 0)
+        currentBackgroundTask = task
+        persistState()
+        state = .uploading
+        connectionInfo = "Upload started"
+        print("[UploadManager] Starting upload task to \(uploadURL)")
+        task.resume()
+    }
+
+    private func resumeUpload() async {
+        if let resumeData {
+            progressBaseBytes = bytesUploaded
+            let task = backgroundSession.uploadTask(withResumeData: resumeData)
+            task.taskDescription = makeTaskDescription(baseOffset: progressBaseBytes)
+            currentBackgroundTask = task
+            self.resumeData = nil
+            persistState()
+            state = .uploading
+            connectionInfo = "Upload resumed"
+            print("[UploadManager] Resuming upload from native resume data")
+            task.resume()
+            return
+        }
+
         if fileURL == nil, assetIdentifier != nil {
             connectionInfo = "Re-exporting from Photos..."
             if let exportedURL = await exportAssetToFile() {
                 fileURL = exportedURL
                 selectedFileName = exportedURL.lastPathComponent
                 persistState()
-                await enqueueRemainingUpload()
             } else {
-                state = .failed
-                errorMessage = "Could not re-export video from Photos library"
-                connectionInfo = "Error"
-            }
-            return
-        }
-
-        guard let fileURL else {
-            print("[UploadManager] No file URL")
-            return
-        }
-        guard resumptionPath != nil else {
-            print("[UploadManager] No resumption path")
-            return
-        }
-        guard let total = totalBytes else {
-            print("[UploadManager] No total bytes")
-            return
-        }
-        guard !isPaused, !isCancelled else {
-            print("[UploadManager] Upload paused or cancelled")
-            return
-        }
-        guard currentOffset < total else {
-            completeUpload()
-            return
-        }
-
-        guard let patchURL = buildResumptionURL() else {
-            state = .failed
-            errorMessage = "Cannot build resumption URL"
-            connectionInfo = "Error"
-            return
-        }
-
-        let remaining = total - currentOffset
-
-        print("[UploadManager] Enqueuing upload: offset=\(currentOffset), remaining=\(remaining)")
-
-        // At offset 0 use the original file directly; otherwise write remaining bytes to a temp file
-        let uploadFileURL: URL
-        if currentOffset == 0 {
-            uploadFileURL = fileURL
-        } else {
-            connectionInfo = "Preparing remaining \(formatBytes(remaining))..."
-            guard let tempURL = await writeRemainderToTempFile(offset: currentOffset) else {
-                state = .failed
-                errorMessage = "Failed to write remainder temp file at offset \(currentOffset)"
-                connectionInfo = "Error"
+                await setError("Could not re-export video from Photos library")
                 return
             }
-            uploadFileURL = tempURL
         }
 
-        connectionInfo = "Uploading \(formatBytes(currentOffset))/\(formatBytes(total))..."
-
-        var request = URLRequest(url: patchURL)
-        request.httpMethod = "PATCH"
-        request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
-        request.setValue("\(currentOffset)", forHTTPHeaderField: "Upload-Offset")
-        request.setValue("?0", forHTTPHeaderField: "Upload-Incomplete")
-        request.setValue("\(remaining)", forHTTPHeaderField: "Content-Length")
-        request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
-        if let authToken {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        if fileURL != nil {
+            state = .idle
+            startUpload(serverURL: serverURL)
+            return
         }
 
-        let task = backgroundSession.uploadTask(with: request, fromFile: uploadFileURL)
-        task.taskDescription = "upload_\(currentOffset)"
-        currentBackgroundTask = task
-        task.resume()
+        await setError("No file available to resume")
     }
 
-    /// Step 3: HEAD to check server offset for resumption (foreground session)
-    private func queryOffsetAndResume() async {
-        guard let headURL = buildResumptionURL() else {
-            await setError("No resumption URL for HEAD")
-            return
+    private func buildUploadURL() -> URL? {
+        guard let uploadBaseURL = URL(string: serverURL) else { return nil }
+        if uploadBaseURL.path.isEmpty || uploadBaseURL.path == "/" {
+            return uploadBaseURL.appendingPathComponent("upload")
         }
-
-        var request = URLRequest(url: headURL)
-        request.httpMethod = "HEAD"
-        request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
-        if let authToken {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-        }
-
-        print("[UploadManager] HEAD \(headURL)")
-
-        do {
-            let (_, response) = try await foregroundSession.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                await setError("Invalid HEAD response")
-                return
-            }
-
-            print("[UploadManager] HEAD response: \(httpResponse.statusCode)")
-
-            if httpResponse.statusCode == 204 {
-                if let offsetStr = httpResponse.value(forHTTPHeaderField: "Upload-Offset"),
-                   let offset = Int64(offsetStr) {
-                    currentOffset = offset
-                    bytesUploaded = offset
-                    updateProgress()
-                    state = .uploading
-                    connectionInfo = "Resumed from offset \(offset)"
-                    persistState()
-                    print("[UploadManager] Resumed at offset \(offset)")
-                    await enqueueRemainingUpload()
-                } else {
-                    await setError("No Upload-Offset in HEAD response")
-                }
-            } else if httpResponse.statusCode == 404 {
-                resumptionPath = nil
-                currentOffset = 0
-                bytesUploaded = 0
-                progress = 0
-                clearPersistedState()
-                await setError("Upload expired on server. Please restart.")
-            } else {
-                await setError("HEAD returned \(httpResponse.statusCode)")
-            }
-        } catch {
-            await setError("Resume failed: \(error.localizedDescription)")
-        }
+        return uploadBaseURL
     }
 
     // MARK: - State Persistence
 
     private struct PersistedUploadState: Codable {
-        var resumptionPath: String
         var serverURL: String
         var filePath: String?
         var assetIdentifier: String?
         var totalBytes: Int64
         var currentOffset: Int64
         var authToken: String?
+        var resumeData: Data?
+        var resumeURL: String?
     }
 
     private func persistState() {
-        guard let resumptionPath else { return }
         let persisted = PersistedUploadState(
-            resumptionPath: resumptionPath,
             serverURL: serverURL,
             filePath: fileURL?.path,
             assetIdentifier: assetIdentifier,
             totalBytes: totalBytes ?? 0,
             currentOffset: currentOffset,
-            authToken: authToken
+            authToken: authToken,
+            resumeData: resumeData,
+            resumeURL: resumeURL?.absoluteString
         )
         if let data = try? JSONEncoder().encode(persisted) {
             UserDefaults.standard.set(data, forKey: Self.stateKey)
@@ -820,35 +613,51 @@ class UploadManager: NSObject, ObservableObject {
 
         lastSpeedCheckTime = now
         lastSpeedCheckBytes = bytesUploaded
+
+        if state == .uploading || state == .paused || state == .resuming {
+            currentOffset = bytesUploaded
+            persistState()
+        }
     }
 
-    private func updateProgress() {
+    private func updateProgress(uploadedBytes: Int64? = nil) {
+        if let uploadedBytes {
+            bytesUploaded = uploadedBytes
+        }
+        currentOffset = bytesUploaded
         guard let total = totalBytes, total > 0 else { return }
         progress = Double(bytesUploaded) / Double(total)
     }
 
     // MARK: - Completion / Error
 
-    private func completeUpload() {
+    private func completeUpload(finalUploadedBytes: Int64? = nil) {
         state = .completed
         progress = 1.0
+        if let finalUploadedBytes {
+            bytesUploaded = finalUploadedBytes
+        } else {
+            bytesUploaded = totalBytes ?? bytesUploaded
+        }
+        currentOffset = bytesUploaded
         connectionInfo = "Upload complete"
         stopSpeedTracking()
         clearPersistedState()
-        cleanupTempFiles()
         cleanupExportedFile()
-        resumptionPath = nil
         assetIdentifier = nil
         fileURL = nil
         currentBackgroundTask = nil
+        resumeData = nil
+        resumeURL = nil
+        progressBaseBytes = 0
 
-        if let start = uploadStartTime {
+        if let start = uploadStartTime, bytesUploaded > 0 {
             let elapsed = Date().timeIntervalSince(start)
-            let totalMB = Double(totalBytes ?? 0) / 1_048_576
-            speedDisplay = String(format: "Avg: %.1f MB/s (%.1fs)", totalMB / elapsed, elapsed)
+            let uploadedMB = Double(bytesUploaded) / 1_048_576
+            speedDisplay = String(format: "Avg: %.1f MB/s (%.1fs)", uploadedMB / elapsed, elapsed)
         }
-        sendLocalNotification(title: "Upload Complete", body: "\(formatBytes(totalBytes ?? 0)) uploaded successfully.")
-        print("[UploadManager] Upload complete! Total: \(formatBytes(totalBytes ?? 0))")
+        sendLocalNotification(title: "Upload Complete", body: "\(formatBytes(bytesUploaded)) uploaded successfully.")
+        print("[UploadManager] Upload complete! Total: \(formatBytes(bytesUploaded))")
     }
 
     private func setError(_ message: String) async {
@@ -857,6 +666,8 @@ class UploadManager: NSObject, ObservableObject {
         connectionInfo = "Error"
         stopSpeedTracking()
         currentBackgroundTask = nil
+        currentOffset = bytesUploaded
+        persistState()
         print("[UploadManager] ERROR: \(message)")
     }
 
@@ -880,6 +691,114 @@ class UploadManager: NSObject, ObservableObject {
         }
         return "\(bytes) B"
     }
+
+    private func deleteServerUploadIfPossible() {
+        guard let resumeURL else { return }
+        var request = URLRequest(url: resumeURL)
+        request.httpMethod = "DELETE"
+        request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+        foregroundSession.dataTask(with: request).resume()
+    }
+
+    private func makeTaskDescription(baseOffset: Int64) -> String {
+        "upload_base_\(baseOffset)"
+    }
+
+    private func parseTaskBaseOffset(from taskDescription: String?) -> Int64? {
+        guard let taskDescription,
+              let baseOffset = Int64(taskDescription.replacingOccurrences(of: "upload_base_", with: "")) else {
+            return nil
+        }
+        return baseOffset
+    }
+
+    private func parseUploadIncomplete(from response: HTTPURLResponse) -> Bool? {
+        guard let value = response.value(forHTTPHeaderField: "Upload-Incomplete")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() else {
+            return nil
+        }
+
+        switch value {
+        case "?1", "true":
+            return true
+        case "?0", "false":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private enum CompletionVerificationResult {
+        case success(Int64)
+        case failure(String)
+    }
+
+    private func verifyCompletedUploadOffset(
+        from response: HTTPURLResponse,
+        responseOffset: Int64?,
+        responseIsIncomplete: Bool?
+    ) async -> CompletionVerificationResult {
+        if responseIsIncomplete == true {
+            return .failure("Server reported the upload is incomplete at offset \(responseOffset ?? bytesUploaded)")
+        }
+
+        if let totalBytes, let responseOffset, responseOffset == totalBytes {
+            return .success(responseOffset)
+        }
+
+        guard let resumeURL else {
+            if let responseOffset, let totalBytes {
+                return .failure("Server acknowledged only \(formatBytes(responseOffset)) of \(formatBytes(totalBytes))")
+            }
+
+            return .failure("Server did not confirm the uploaded byte count")
+        }
+
+        var request = URLRequest(url: resumeURL)
+        request.httpMethod = "HEAD"
+        request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            let (_, headResponse) = try await foregroundSession.data(for: request)
+            guard let httpHeadResponse = headResponse as? HTTPURLResponse else {
+                return .failure("Server returned an invalid HEAD response while verifying completion")
+            }
+
+            print("[UploadManager] Completion verification HEAD response: \(httpHeadResponse.statusCode)")
+            print("[UploadManager] Completion verification headers: \(httpHeadResponse.allHeaderFields)")
+
+            if httpHeadResponse.statusCode == 204 {
+                let headOffset = httpHeadResponse.value(forHTTPHeaderField: "Upload-Offset")
+                    .flatMap(Int64.init)
+                let headIsIncomplete = parseUploadIncomplete(from: httpHeadResponse)
+
+                if headIsIncomplete == true {
+                    return .failure("Server reports the upload is still incomplete at offset \(headOffset ?? bytesUploaded)")
+                }
+
+                if let totalBytes, let headOffset, headOffset == totalBytes {
+                    return .success(headOffset)
+                }
+
+                if let totalBytes, let headOffset {
+                    return .failure("Server acknowledged only \(formatBytes(headOffset)) of \(formatBytes(totalBytes))")
+                }
+
+                return .failure("Server did not provide an Upload-Offset while verifying completion")
+            }
+
+            return .failure("Completion verification HEAD returned \(httpHeadResponse.statusCode)")
+        } catch {
+            return .failure("Completion verification failed: \(error.localizedDescription)")
+        }
+    }
 }
 
 // MARK: - URLSession Delegate
@@ -895,14 +814,33 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
         totalBytesExpectedToSend: Int64
     ) {
         Task { @MainActor in
-            guard task.originalRequest?.httpMethod == "PATCH" else { return }
-            bytesUploaded = currentOffset + totalBytesSent
-            updateProgress()
+            guard session.configuration.identifier == Self.backgroundSessionID else { return }
+            let taskBaseOffset = parseTaskBaseOffset(from: task.taskDescription) ?? progressBaseBytes
+            let uploadedBytes = max(bytesUploaded, taskBaseOffset + totalBytesSent)
+            updateProgress(uploadedBytes: uploadedBytes)
+        }
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceiveInformationalResponse response: HTTPURLResponse
+    ) {
+        MainActor.assumeIsolated {
+            guard session.configuration.identifier == Self.backgroundSessionID else { return }
+            if response.statusCode == 104,
+               let location = response.value(forHTTPHeaderField: "Location"),
+               let parsedResumeURL = URL(string: location) {
+                resumeURL = parsedResumeURL
+                connectionInfo = "Server confirmed resumable upload support"
+                persistState()
+                print("[UploadManager] Received resumable upload URL: \(parsedResumeURL)")
+            }
         }
     }
 
     /// Called when the background upload task completes (success or failure).
-    /// On success: completes the upload. On failure: queries server offset and retries.
+    /// On failure, retries with native resume data when available.
     nonisolated func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -910,10 +848,6 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
     ) {
         MainActor.assumeIsolated {
             guard session.configuration.identifier == Self.backgroundSessionID else { return }
-            guard task.originalRequest?.httpMethod == "PATCH" else { return }
-
-            // Clean up any temp remainder file
-            cleanupTempFiles()
 
             // If this was a cancellation (from pause or cancel), don't continue
             if let error = error as? NSError, error.code == NSURLErrorCancelled {
@@ -921,96 +855,96 @@ extension UploadManager: URLSessionDelegate, URLSessionTaskDelegate, URLSessionD
                 return
             }
 
-            // Handle network errors — query offset and retry
-            if let error {
-                print("[UploadManager] Background task error: \(error)")
-                sendLocalNotification(title: "Upload Interrupted", body: "Retrying automatically...")
-                if !isPaused, !isCancelled {
-                    connectionInfo = "Transfer interrupted, resuming..."
-                    currentBackgroundTask = nil
-                    print("[UploadManager] Transfer interrupted, querying offset to retry")
+            if let urlError = error as? URLError,
+               let newResumeData = urlError.uploadTaskResumeData {
+                print("[UploadManager] Background task interrupted: \(urlError)")
+                resumeData = newResumeData
+                currentBackgroundTask = nil
+                currentOffset = bytesUploaded
+                persistState()
 
-                    // Request background execution time for the HEAD + temp file write + re-enqueue
-                    var bgTaskID = UIBackgroundTaskIdentifier.invalid
-                    bgTaskID = UIApplication.shared.beginBackgroundTask {
-                        UIApplication.shared.endBackgroundTask(bgTaskID)
-                        bgTaskID = .invalid
-                    }
-
-                    Task {
-                        await self.queryOffsetAndResume()
-                        if bgTaskID != .invalid {
-                            UIApplication.shared.endBackgroundTask(bgTaskID)
-                        }
-                    }
+                if isPaused || isCancelled {
+                    return
                 }
+
+                sendLocalNotification(title: "Upload Interrupted", body: "Retrying automatically...")
+                connectionInfo = "Transfer interrupted, resuming..."
+                progressBaseBytes = bytesUploaded
+
+                let resumedTask = backgroundSession.uploadTask(withResumeData: newResumeData)
+                resumedTask.taskDescription = makeTaskDescription(baseOffset: progressBaseBytes)
+                currentBackgroundTask = resumedTask
+                resumeData = nil
+                persistState()
+                resumedTask.resume()
+                print("[UploadManager] Retrying upload from native resume data")
                 return
             }
+
+            if let error {
+                state = .failed
+                errorMessage = "Upload failed: \(error.localizedDescription)"
+                connectionInfo = "Error"
+                stopSpeedTracking()
+                currentBackgroundTask = nil
+                persistState()
+                sendLocalNotification(title: "Upload Failed", body: error.localizedDescription)
+                print("[UploadManager] ERROR: \(error)")
+                return
+            }
+
             guard let httpResponse = task.response as? HTTPURLResponse else {
                 state = .failed
-                errorMessage = "Invalid server response for background PATCH"
+                errorMessage = "Invalid server response for upload"
                 connectionInfo = "Error"
                 stopSpeedTracking()
                 currentBackgroundTask = nil
                 sendLocalNotification(title: "Upload Failed", body: "Invalid server response")
-                print("[UploadManager] ERROR: Invalid server response for background PATCH")
+                persistState()
+                print("[UploadManager] ERROR: Invalid server response for upload")
                 return
             }
 
             let statusCode = httpResponse.statusCode
-            print("[UploadManager] Background PATCH response: \(statusCode)")
+            print("[UploadManager] Background upload response: \(statusCode)")
+            print("[UploadManager] Upload response headers: \(httpResponse.allHeaderFields)")
 
-            if statusCode == 409 {
-                // Offset conflict — re-sync via HEAD
-                connectionInfo = "Offset conflict, re-syncing..."
-                print("[UploadManager] 409 Conflict, querying offset")
-                Task {
-                    await queryOffsetAndResume()
-                }
-                return
-            }
+            let responseOffset = httpResponse.value(forHTTPHeaderField: "Upload-Offset")
+                .flatMap(Int64.init)
+            let responseIsIncomplete = parseUploadIncomplete(from: httpResponse)
 
             guard (200...299).contains(statusCode) else {
                 state = .failed
-                errorMessage = "PATCH returned \(statusCode)"
+                errorMessage = "Upload returned \(statusCode)"
                 connectionInfo = "Error"
                 stopSpeedTracking()
                 currentBackgroundTask = nil
                 sendLocalNotification(title: "Upload Failed", body: "Server returned \(statusCode). Open app to retry.")
-                print("[UploadManager] ERROR: PATCH returned \(statusCode)")
+                persistState()
+                print("[UploadManager] ERROR: Upload returned \(statusCode)")
                 return
             }
 
-            // Update offset from server response
-            if let serverOffsetStr = httpResponse.value(forHTTPHeaderField: "Upload-Offset"),
-               let serverOffset = Int64(serverOffsetStr) {
-                currentOffset = serverOffset
-            } else {
-                // Fallback: calculate from what we sent
-                if let requestOffsetStr = task.originalRequest?.value(forHTTPHeaderField: "Upload-Offset"),
-                   let requestOffset = Int64(requestOffsetStr),
-                   let contentLenStr = task.originalRequest?.value(forHTTPHeaderField: "Content-Length"),
-                   let contentLen = Int64(contentLenStr) {
-                    currentOffset = requestOffset + contentLen
-                }
-            }
-
-            bytesUploaded = currentOffset
-            updateProgress()
-            persistState()
             currentBackgroundTask = nil
+            Task { @MainActor in
+                let verificationResult = await verifyCompletedUploadOffset(
+                    from: httpResponse,
+                    responseOffset: responseOffset,
+                    responseIsIncomplete: responseIsIncomplete
+                )
 
-            print("[UploadManager] Upload done, offset now: \(currentOffset)")
-
-            guard let total = totalBytes else { return }
-
-            if currentOffset >= total {
-                completeUpload()
-            } else if !isPaused, !isCancelled {
-                // Partial completion — server accepted less than we sent; retry remainder
-                connectionInfo = "Partial upload, resuming remainder..."
-                Task {
-                    await enqueueRemainingUpload()
+                switch verificationResult {
+                case .success(let verifiedOffset):
+                    updateProgress(uploadedBytes: verifiedOffset)
+                    completeUpload(finalUploadedBytes: verifiedOffset)
+                case .failure(let message):
+                    state = .failed
+                    errorMessage = message
+                    connectionInfo = "Server completion could not be verified"
+                    stopSpeedTracking()
+                    persistState()
+                    sendLocalNotification(title: "Upload Incomplete", body: message)
+                    print("[UploadManager] ERROR: \(message)")
                 }
             }
         }
