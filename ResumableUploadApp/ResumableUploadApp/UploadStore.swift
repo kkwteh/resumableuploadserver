@@ -104,7 +104,6 @@ final class UploadStore: NSObject, ObservableObject {
                 errorDescription: nil,
                 resumeDataFileName: nil,
                 resumableUploadURL: nil,
-                lastKnownServerOffset: nil,
                 lastUpdatedAt: .now
             )
 
@@ -187,7 +186,6 @@ final class UploadStore: NSObject, ObservableObject {
                 upload.taskIdentifier = nil
                 upload.resumeDataFileName = nil
                 upload.resumableUploadURL = nil
-                upload.lastKnownServerOffset = nil
                 upload.localFilePath = nil
                 upload.errorDescription = nil
                 upload.lastUpdatedAt = .now
@@ -252,7 +250,7 @@ final class UploadStore: NSObject, ObservableObject {
 
         let baseOffset: Int64
         if isResumingFromNativeResumeData {
-            baseOffset = max(uploads[index].bytesSent, uploads[index].lastKnownServerOffset ?? 0)
+            baseOffset = uploads[index].bytesSent
         } else {
             baseOffset = 0
         }
@@ -269,7 +267,6 @@ final class UploadStore: NSObject, ObservableObject {
             if isResumingFromNativeResumeData == false {
                 upload.bytesSent = 0
                 upload.resumableUploadURL = nil
-                upload.lastKnownServerOffset = nil
             }
             upload.lastUpdatedAt = .now
         }
@@ -288,7 +285,7 @@ final class UploadStore: NSObject, ObservableObject {
 
             updateUpload(id: id) { upload in
                 upload.taskIdentifier = task.taskIdentifier
-                upload.bytesSent = max(upload.bytesSent, max(taskBaseOffset + task.countOfBytesSent, upload.lastKnownServerOffset ?? 0))
+                upload.bytesSent = max(upload.bytesSent, taskBaseOffset + task.countOfBytesSent)
                 if task.countOfBytesExpectedToSend > 0 {
                     upload.expectedBytes = max(upload.expectedBytes, taskBaseOffset + task.countOfBytesExpectedToSend)
                 }
@@ -800,7 +797,6 @@ final class UploadStore: NSObject, ObservableObject {
             upload.responseStatusCode = nil
             upload.errorDescription = nil
             upload.resumeDataFileName = nil
-            upload.lastKnownServerOffset = max(upload.lastKnownServerOffset ?? 0, serverOffset)
             upload.lastUpdatedAt = .now
         }
 
@@ -1158,7 +1154,6 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
             self.updateUpload(id: id) { upload in
                 if let offset {
                     upload.bytesSent = max(upload.bytesSent, offset)
-                    upload.lastKnownServerOffset = max(upload.lastKnownServerOffset ?? 0, offset)
                 }
                 if let resumableUploadURL {
                     upload.resumableUploadURL = resumableUploadURL.absoluteString
@@ -1268,7 +1263,6 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
                     upload.errorDescription = nil
                     upload.resumeDataFileName = nil
                     upload.resumableUploadURL = nil
-                    upload.lastKnownServerOffset = nil
                     upload.localFilePath = nil
                     upload.lastUpdatedAt = .now
                 }
