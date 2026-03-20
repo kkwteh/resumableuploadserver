@@ -1,0 +1,398 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000020 /* ResumableUploadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000001 /* ResumableUploadApp.swift */; };
+		A00000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000002 /* ContentView.swift */; };
+		A00000000000000000000022 /* UploadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* UploadStore.swift */; };
+		A00000000000000000000023 /* UploadRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* UploadRecord.swift */; };
+		A00000000000000000000024 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* AppDelegate.swift */; };
+		A00000000000000000000025 /* VideoPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* VideoPicker.swift */; };
+		A00000000000000000000026 /* UploadRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* UploadRecordTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A00000000000000000000030 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000010 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000014;
+			remoteInfo = ResumableUploadApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A00000000000000000000001 /* ResumableUploadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumableUploadApp.swift; sourceTree = "<group>"; };
+		A00000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A00000000000000000000003 /* UploadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000004 /* UploadRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadRecord.swift; sourceTree = "<group>"; };
+		A00000000000000000000005 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A00000000000000000000006 /* VideoPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPicker.swift; sourceTree = "<group>"; };
+		A00000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A00000000000000000000008 /* UploadRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadRecordTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000016 /* ResumableUploadApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ResumableUploadApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000017 /* ResumableUploadAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ResumableUploadAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00000000000000000000040 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000041 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000011 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000012 /* ResumableUploadApp */,
+				A00000000000000000000013 /* ResumableUploadAppTests */,
+				A00000000000000000000018 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000012 /* ResumableUploadApp */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000001 /* ResumableUploadApp.swift */,
+				A00000000000000000000002 /* ContentView.swift */,
+				A00000000000000000000003 /* UploadStore.swift */,
+				A00000000000000000000019 /* Models */,
+				A0000000000000000000001A /* Support */,
+				A00000000000000000000007 /* Info.plist */,
+			);
+			path = ResumableUploadApp;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000013 /* ResumableUploadAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000008 /* UploadRecordTests.swift */,
+			);
+			path = ResumableUploadAppTests;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000018 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000016 /* ResumableUploadApp.app */,
+				A00000000000000000000017 /* ResumableUploadAppTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000019 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000004 /* UploadRecord.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000001A /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000005 /* AppDelegate.swift */,
+				A00000000000000000000006 /* VideoPicker.swift */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00000000000000000000014 /* ResumableUploadApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000050 /* Build configuration list for PBXNativeTarget "ResumableUploadApp" */;
+			buildPhases = (
+				A00000000000000000000042 /* Sources */,
+				A00000000000000000000040 /* Frameworks */,
+				A00000000000000000000043 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ResumableUploadApp;
+			productName = ResumableUploadApp;
+			productReference = A00000000000000000000016 /* ResumableUploadApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A00000000000000000000015 /* ResumableUploadAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000051 /* Build configuration list for PBXNativeTarget "ResumableUploadAppTests" */;
+			buildPhases = (
+				A00000000000000000000044 /* Sources */,
+				A00000000000000000000041 /* Frameworks */,
+				A00000000000000000000045 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A00000000000000000000031 /* PBXTargetDependency */,
+			);
+			name = ResumableUploadAppTests;
+			productName = ResumableUploadAppTests;
+			productReference = A00000000000000000000017 /* ResumableUploadAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000010 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					A00000000000000000000014 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					A00000000000000000000015 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = A00000000000000000000014;
+					};
+				};
+			};
+			buildConfigurationList = A00000000000000000000052 /* Build configuration list for PBXProject "ResumableUploadApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000011;
+			productRefGroup = A00000000000000000000018 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00000000000000000000014 /* ResumableUploadApp */,
+				A00000000000000000000015 /* ResumableUploadAppTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000043 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000045 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000042 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000020 /* ResumableUploadApp.swift in Sources */,
+				A00000000000000000000021 /* ContentView.swift in Sources */,
+				A00000000000000000000022 /* UploadStore.swift in Sources */,
+				A00000000000000000000023 /* UploadRecord.swift in Sources */,
+				A00000000000000000000024 /* AppDelegate.swift in Sources */,
+				A00000000000000000000025 /* VideoPicker.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000044 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000026 /* UploadRecordTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000031 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000014 /* ResumableUploadApp */;
+			targetProxy = A00000000000000000000030 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000060 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A00000000000000000000061 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A00000000000000000000062 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = XMWD8FBR5T;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ResumableUploadApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinteh.ResumableUploadApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A00000000000000000000063 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = XMWD8FBR5T;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ResumableUploadApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinteh.ResumableUploadApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A00000000000000000000064 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinteh.ResumableUploadAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ResumableUploadApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ResumableUploadApp";
+			};
+			name = Debug;
+		};
+		A00000000000000000000065 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinteh.ResumableUploadAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ResumableUploadApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ResumableUploadApp";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000050 /* Build configuration list for PBXNativeTarget "ResumableUploadApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000062 /* Debug */,
+				A00000000000000000000063 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000051 /* Build configuration list for PBXNativeTarget "ResumableUploadAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000064 /* Debug */,
+				A00000000000000000000065 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000052 /* Build configuration list for PBXProject "ResumableUploadApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000060 /* Debug */,
+				A00000000000000000000061 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00000000000000000000010 /* Project object */;
+}
