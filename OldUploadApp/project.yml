@@ -1,6 +1,6 @@
-name: ResumableUploadApp
+name: OldUploadApp
 options:
-  bundleIdPrefix: com.resumableupload
+  bundleIdPrefix: com.navigateai
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.0"
@@ -8,15 +8,15 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
 targets:
-  ResumableUploadApp:
+  OldUploadApp:
     type: application
     platform: iOS
     sources:
-      - ResumableUploadApp
+      - OldUploadApp
     settings:
       base:
-        INFOPLIST_FILE: ResumableUploadApp/Info.plist
+        INFOPLIST_FILE: OldUploadApp/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        PRODUCT_BUNDLE_IDENTIFIER: com.resumableupload.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.navigateai.oldupload.app
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"

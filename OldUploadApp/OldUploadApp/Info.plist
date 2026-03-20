@@ -4,10 +4,10 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.resumableupload.background</string>
+		<string>com.navigateai.oldupload.background</string>
 	</array>
 	<key>CFBundleDisplayName</key>
-	<string>Upload POC</string>
+	<string>OldUploadApp</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

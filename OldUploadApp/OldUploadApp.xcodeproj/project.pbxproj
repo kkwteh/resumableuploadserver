@@ -10,35 +10,35 @@
 		11C749EE7D8BDAB9690E3075 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E073AB667A3A74C774B5E1AC /* Assets.xcassets */; };
 		201FCE9270648416837B0F88 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA23522ACC79AF223156CFE /* ContentView.swift */; };
 		3DB6A9DFA7688DD3507DAE1D /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C77429C59112BAEEA8E663C /* UploadManager.swift */; };
-		9A681F07E7891B4897BCF6E2 /* ResumableUploadAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FEA0E414670CEBF2834F71A /* ResumableUploadAppApp.swift */; };
+		9A681F07E7891B4897BCF6E2 /* OldUploadAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FEA0E414670CEBF2834F71A /* OldUploadAppApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0C77429C59112BAEEA8E663C /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
-		60A9EFB66B6CDDB28767AE8E /* ResumableUploadApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ResumableUploadApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		8FEA0E414670CEBF2834F71A /* ResumableUploadAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumableUploadAppApp.swift; sourceTree = "<group>"; };
+		60A9EFB66B6CDDB28767AE8E /* OldUploadApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OldUploadApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8FEA0E414670CEBF2834F71A /* OldUploadAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OldUploadAppApp.swift; sourceTree = "<group>"; };
 		CAA23522ACC79AF223156CFE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		E073AB667A3A74C774B5E1AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FCC6AC49762F3F73A480C361 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
-		27BC5AF8DF78FE50973692B0 /* ResumableUploadApp */ = {
+		27BC5AF8DF78FE50973692B0 /* OldUploadApp */ = {
 			isa = PBXGroup;
 			children = (
 				E073AB667A3A74C774B5E1AC /* Assets.xcassets */,
 				CAA23522ACC79AF223156CFE /* ContentView.swift */,
 				FCC6AC49762F3F73A480C361 /* Info.plist */,
-				8FEA0E414670CEBF2834F71A /* ResumableUploadAppApp.swift */,
+				8FEA0E414670CEBF2834F71A /* OldUploadAppApp.swift */,
 				0C77429C59112BAEEA8E663C /* UploadManager.swift */,
 			);
-			path = ResumableUploadApp;
+			path = OldUploadApp;
 			sourceTree = "<group>";
 		};
 		414811C658612A643B637AA3 = {
 			isa = PBXGroup;
 			children = (
-				27BC5AF8DF78FE50973692B0 /* ResumableUploadApp */,
+				27BC5AF8DF78FE50973692B0 /* OldUploadApp */,
 				B0B6F110979B4830A199DBB5 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,7 +46,7 @@
 		B0B6F110979B4830A199DBB5 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				60A9EFB66B6CDDB28767AE8E /* ResumableUploadApp.app */,
+				60A9EFB66B6CDDB28767AE8E /* OldUploadApp.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -54,9 +54,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		E22C7D5D37C1BB96B77CB63C /* ResumableUploadApp */ = {
+		E22C7D5D37C1BB96B77CB63C /* OldUploadApp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8044D6CFBC6EFEF821376F88 /* Build configuration list for PBXNativeTarget "ResumableUploadApp" */;
+			buildConfigurationList = 8044D6CFBC6EFEF821376F88 /* Build configuration list for PBXNativeTarget "OldUploadApp" */;
 			buildPhases = (
 				75D1D28D4F72A8C52E2A1EAB /* Sources */,
 				0B34279EF25548A43EF0071F /* Resources */,
@@ -65,11 +65,11 @@
 			);
 			dependencies = (
 			);
-			name = ResumableUploadApp;
+			name = OldUploadApp;
 			packageProductDependencies = (
 			);
-			productName = ResumableUploadApp;
-			productReference = 60A9EFB66B6CDDB28767AE8E /* ResumableUploadApp.app */;
+			productName = OldUploadApp;
+			productReference = 60A9EFB66B6CDDB28767AE8E /* OldUploadApp.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -81,7 +81,7 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2620;
 			};
-			buildConfigurationList = C3FC0A38EB21571B26A7BC4D /* Build configuration list for PBXProject "ResumableUploadApp" */;
+			buildConfigurationList = C3FC0A38EB21571B26A7BC4D /* Build configuration list for PBXProject "OldUploadApp" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -95,7 +95,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				E22C7D5D37C1BB96B77CB63C /* ResumableUploadApp */,
+				E22C7D5D37C1BB96B77CB63C /* OldUploadApp */,
 			);
 		};
 /* End PBXProject section */
@@ -117,7 +117,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				201FCE9270648416837B0F88 /* ContentView.swift in Sources */,
-				9A681F07E7891B4897BCF6E2 /* ResumableUploadAppApp.swift in Sources */,
+				9A681F07E7891B4897BCF6E2 /* OldUploadAppApp.swift in Sources */,
 				3DB6A9DFA7688DD3507DAE1D /* UploadManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -130,12 +130,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = ResumableUploadApp/Info.plist;
+				INFOPLIST_FILE = OldUploadApp/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.navigateai.resumableupload.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.navigateai.oldupload.app;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -147,12 +147,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = ResumableUploadApp/Info.plist;
+				INFOPLIST_FILE = OldUploadApp/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.navigateai.resumableupload.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.navigateai.oldupload.app;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -287,7 +287,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		8044D6CFBC6EFEF821376F88 /* Build configuration list for PBXNativeTarget "ResumableUploadApp" */ = {
+		8044D6CFBC6EFEF821376F88 /* Build configuration list for PBXNativeTarget "OldUploadApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				17C2F1AAF616F14C7ADB8FD8 /* Debug */,
@@ -296,7 +296,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		C3FC0A38EB21571B26A7BC4D /* Build configuration list for PBXProject "ResumableUploadApp" */ = {
+		C3FC0A38EB21571B26A7BC4D /* Build configuration list for PBXProject "OldUploadApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				7947669AB85D1B28AAB09C76 /* Debug */,

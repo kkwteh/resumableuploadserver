@@ -83,7 +83,7 @@ class UploadManager: NSObject, ObservableObject {
     private var progressBaseBytes: Int64 = 0
 
     private static let stateKey = "ResumableUploadState"
-    private static let backgroundSessionID = "com.resumableupload.background"
+    private static let backgroundSessionID = "com.navigateai.oldupload.background"
 
     /// System completion handler provided by AppDelegate when the app is woken for background events
     static var backgroundSessionCompletionHandler: (() -> Void)?

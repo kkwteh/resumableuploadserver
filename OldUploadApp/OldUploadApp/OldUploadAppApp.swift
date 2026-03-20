@@ -25,7 +25,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @main
-struct ResumableUploadAppApp: App {
+struct OldUploadAppApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var uploadManager = UploadManager()
     @Environment(\.scenePhase) private var scenePhase
