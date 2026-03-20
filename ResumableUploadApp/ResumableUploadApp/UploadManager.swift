@@ -71,6 +71,7 @@ class UploadManager: NSObject, ObservableObject {
     /// The path portion of the resumption URL (e.g. /resumable_upload/12345-67890)
     private var resumptionPath: String?
     private var serverURL: String = ""
+    private var authToken: String?
     private var isPaused = false
     private var isCancelled = false
     private var speedTimer: Timer?
@@ -210,7 +211,8 @@ class UploadManager: NSObject, ObservableObject {
     /// Load a video from the PhotosPicker and immediately begin uploading.
     /// Uses PHAssetResourceManager to export the video with progress tracking,
     /// instead of loadTransferable which provides no progress for large files.
-    func loadVideoAndUpload(from item: PhotosPickerItem, serverURL: String) async {
+    func loadVideoAndUpload(from item: PhotosPickerItem, serverURL: String, authToken: String? = nil) async {
+        self.authToken = authToken
         state = .preparing
         preparationProgress = 0
         connectionInfo = "Loading video..."
@@ -389,6 +391,9 @@ class UploadManager: NSObject, ObservableObject {
             var request = URLRequest(url: url)
             request.httpMethod = "DELETE"
             request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
+            if let authToken {
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+            }
             foregroundSession.dataTask(with: request).resume()
         }
 
@@ -425,6 +430,7 @@ class UploadManager: NSObject, ObservableObject {
             currentOffset = saved.currentOffset
             bytesUploaded = saved.currentOffset
             assetIdentifier = saved.assetIdentifier
+            authToken = saved.authToken
 
             let fileExists = saved.filePath.map { FileManager.default.fileExists(atPath: $0) } ?? false
 
@@ -500,6 +506,9 @@ class UploadManager: NSObject, ObservableObject {
         request.setValue("?1", forHTTPHeaderField: "Upload-Incomplete")
         request.setValue("0", forHTTPHeaderField: "Upload-Offset")
         request.setValue("0", forHTTPHeaderField: "Content-Length")
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
 
         print("[UploadManager] POST \(uploadURL) to create upload session")
 
@@ -667,6 +676,9 @@ class UploadManager: NSObject, ObservableObject {
         request.setValue("?0", forHTTPHeaderField: "Upload-Incomplete")
         request.setValue("\(remaining)", forHTTPHeaderField: "Content-Length")
         request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
 
         let task = backgroundSession.uploadTask(with: request, fromFile: uploadFileURL)
         task.taskDescription = "upload_\(currentOffset)"
@@ -684,6 +696,9 @@ class UploadManager: NSObject, ObservableObject {
         var request = URLRequest(url: headURL)
         request.httpMethod = "HEAD"
         request.setValue("3", forHTTPHeaderField: "Upload-Draft-Interop-Version")
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
 
         print("[UploadManager] HEAD \(headURL)")
 
@@ -734,6 +749,7 @@ class UploadManager: NSObject, ObservableObject {
         var assetIdentifier: String?
         var totalBytes: Int64
         var currentOffset: Int64
+        var authToken: String?
     }
 
     private func persistState() {
@@ -744,7 +760,8 @@ class UploadManager: NSObject, ObservableObject {
             filePath: fileURL?.path,
             assetIdentifier: assetIdentifier,
             totalBytes: totalBytes ?? 0,
-            currentOffset: currentOffset
+            currentOffset: currentOffset,
+            authToken: authToken
         )
         if let data = try? JSONEncoder().encode(persisted) {
             UserDefaults.standard.set(data, forKey: Self.stateKey)

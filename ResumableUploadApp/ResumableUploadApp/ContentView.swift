@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var uploadManager: UploadManager
     @State private var selectedItem: PhotosPickerItem?
     @State private var serverURL: String = "https://annie-uninitialled-untractably.ngrok-free.dev/files"
+    @State private var authToken: String = "019d0ab9-c19b-785c-82ab-209fce9b2eb0"
 
     var body: some View {
         NavigationStack {
@@ -12,6 +13,9 @@ struct ContentView: View {
                 Section("Server") {
                     TextField("Server URL", text: $serverURL)
                         .textContentType(.URL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    TextField("Auth Token (optional)", text: $authToken)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
@@ -26,7 +30,7 @@ struct ContentView: View {
                     .onChange(of: selectedItem) { _, newItem in
                         guard let newItem else { return }
                         Task {
-                            await uploadManager.loadVideoAndUpload(from: newItem, serverURL: serverURL)
+                            await uploadManager.loadVideoAndUpload(from: newItem, serverURL: serverURL, authToken: authToken.isEmpty ? nil : authToken)
                         }
                     }
 
