@@ -12,8 +12,3 @@ These are results from testing the mobile app on my iPhone 17 Pro uploading via 
 - SUCCESS Cellular connection makes progress while app is in the background.
 - SUCCESS Uploads can be cancelled
 - SUCCESS Large file (14 GB) can be started, app terminated, and the resumed.
-
-## Observations
-
-- When app is killed, the upload stops making progress, but when the app is restarted progress resumes automatically.
-- When I put the phone into airplane mode progress stops, when I take it out of airplane mode, it does not automatically resume. I can bring the app in the foreground, then it resumes.
