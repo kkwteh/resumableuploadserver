@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 @MainActor
 final class UploadStore: NSObject, ObservableObject {
@@ -20,6 +21,9 @@ final class UploadStore: NSObject, ObservableObject {
     private static let draftInteropVersion = "3"
 
     private var backgroundCompletionHandler: (() -> Void)?
+    private var didReceiveBackgroundSessionFinishEvents = false
+    private var inFlightRecoveryOperations = 0
+    private var backgroundTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
@@ -57,6 +61,8 @@ final class UploadStore: NSObject, ObservableObject {
 
     func captureBackgroundSessionCompletionHandler(_ completionHandler: @escaping () -> Void) {
         backgroundCompletionHandler = completionHandler
+        print("[UploadStore] Captured background session completion handler")
+        finishBackgroundEventsIfNeeded()
     }
 
     func importPickedVideo(
@@ -874,9 +880,88 @@ final class UploadStore: NSObject, ObservableObject {
     }
 
     private func finishBackgroundEventsIfNeeded() {
+        guard didReceiveBackgroundSessionFinishEvents else {
+            return
+        }
+
+        guard inFlightRecoveryOperations == 0 else {
+            print(
+                "[UploadStore] Deferring background session completion handler",
+                "inFlightRecoveryOperations=\(inFlightRecoveryOperations)"
+            )
+            return
+        }
+
         let completionHandler = backgroundCompletionHandler
         backgroundCompletionHandler = nil
+        didReceiveBackgroundSessionFinishEvents = false
+        print("[UploadStore] Invoking background session completion handler")
         completionHandler?()
+    }
+
+    private func beginRecoveryOperation(reason: String, uploadID: UUID) {
+        inFlightRecoveryOperations += 1
+
+        if backgroundTaskIdentifier == .invalid {
+            backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "UploadRecovery") { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    print(
+                        "[UploadStore] Background task expired",
+                        "inFlightRecoveryOperations=\(self.inFlightRecoveryOperations)"
+                    )
+                    self.endBackgroundTaskIfNeeded(force: true)
+                }
+            }
+
+            print(
+                "[UploadStore] Began UIApplication background task",
+                "identifier=\(backgroundTaskIdentifier.rawValue)"
+            )
+        }
+
+        print(
+            "[UploadStore] Began recovery operation",
+            "uploadID=\(uploadID.uuidString)",
+            "reason=\(reason)",
+            "inFlightRecoveryOperations=\(inFlightRecoveryOperations)"
+        )
+    }
+
+    private func endRecoveryOperation(reason: String, uploadID: UUID) {
+        inFlightRecoveryOperations = max(0, inFlightRecoveryOperations - 1)
+
+        print(
+            "[UploadStore] Ended recovery operation",
+            "uploadID=\(uploadID.uuidString)",
+            "reason=\(reason)",
+            "inFlightRecoveryOperations=\(inFlightRecoveryOperations)"
+        )
+
+        if inFlightRecoveryOperations == 0 {
+            endBackgroundTaskIfNeeded(force: false)
+            finishBackgroundEventsIfNeeded()
+        }
+    }
+
+    private func endBackgroundTaskIfNeeded(force: Bool) {
+        guard backgroundTaskIdentifier != .invalid else {
+            return
+        }
+
+        guard force || inFlightRecoveryOperations == 0 else {
+            return
+        }
+
+        let identifier = backgroundTaskIdentifier
+        backgroundTaskIdentifier = .invalid
+        UIApplication.shared.endBackgroundTask(identifier)
+
+        print(
+            "[UploadStore] Ended UIApplication background task",
+            "identifier=\(identifier.rawValue)",
+            "force=\(force)"
+        )
     }
 
     private func sanitizedEndpoint(from endpointString: String) -> URL? {
@@ -1013,6 +1098,11 @@ private extension String {
 extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate {
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         Task { @MainActor in
+            self.didReceiveBackgroundSessionFinishEvents = true
+            print(
+                "[UploadStore] Background URLSession finished delivering events",
+                "inFlightRecoveryOperations=\(self.inFlightRecoveryOperations)"
+            )
             self.finishBackgroundEventsIfNeeded()
         }
     }
@@ -1083,6 +1173,11 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
 
         Task { @MainActor in
             guard let existingUpload = self.upload(with: id) else { return }
+
+            self.beginRecoveryOperation(reason: "didCompleteWithError", uploadID: id)
+            defer {
+                self.endRecoveryOperation(reason: "didCompleteWithError", uploadID: id)
+            }
 
             if existingUpload.state == .paused || existingUpload.state == .canceled {
                 return
