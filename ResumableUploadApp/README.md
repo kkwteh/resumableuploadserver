@@ -25,7 +25,7 @@ Apple's resumable upload support is automatic on the client side, but only works
 At the time this app was built:
 
 - The latest draft is `draft-ietf-httpbis-resumable-upload-11`
-- The current draft interop version is `8`
+- When sending upload requests explicitly, the app uses draft interop version `6`, because this is the same version used under the hood by iOS 18.
 
 The backend should implement the draft flow on the upload endpoint that receives the original request and must support the resumable-upload behaviors that `URLSession` depends on, including:
 

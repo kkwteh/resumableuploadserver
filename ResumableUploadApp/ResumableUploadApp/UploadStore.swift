@@ -18,7 +18,7 @@ final class UploadStore: NSObject, ObservableObject {
     private let resumeDataDirectoryURL: URL
     private let resumeChunkDirectoryURL: URL
 
-    private static let draftInteropVersion = "3"
+    private static let draftInteropVersion = "6"
 
     private var backgroundCompletionHandler: (() -> Void)?
     private var didReceiveBackgroundSessionFinishEvents = false
@@ -230,7 +230,7 @@ final class UploadStore: NSObject, ObservableObject {
             request.allowsExpensiveNetworkAccess = true
             request.networkServiceType = .responsiveData
             request.setValue(Self.draftInteropVersion, forHTTPHeaderField: "Upload-Draft-Interop-Version")
-            request.setValue("?0", forHTTPHeaderField: "Upload-Incomplete")
+            request.setValue("?1", forHTTPHeaderField: "Upload-Complete")
             request.setValue(contentType(for: fileURL), forHTTPHeaderField: "Content-Type")
             request.setValue(uploads[index].fileName, forHTTPHeaderField: "X-Upload-Filename")
             if let authToken = uploads[index].authToken, authToken.isEmpty == false {
@@ -400,8 +400,8 @@ final class UploadStore: NSObject, ObservableObject {
         }
     }
 
-    private func parseUploadIncomplete(from response: HTTPURLResponse) -> Bool? {
-        guard let value = response.value(forHTTPHeaderField: "Upload-Incomplete")?
+    private func parseStructuredFieldBoolean(_ value: String?) -> Bool? {
+        guard let value = value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         else {
@@ -416,6 +416,19 @@ final class UploadStore: NSObject, ObservableObject {
         default:
             return nil
         }
+    }
+
+    private func parseUploadComplete(from response: HTTPURLResponse) -> Bool? {
+        if let isComplete = parseStructuredFieldBoolean(response.value(forHTTPHeaderField: "Upload-Complete")) {
+            return isComplete
+        }
+
+        // Accept the pre-v6 header for compatibility with older servers.
+        if let isIncomplete = parseStructuredFieldBoolean(response.value(forHTTPHeaderField: "Upload-Incomplete")) {
+            return isIncomplete == false
+        }
+
+        return nil
     }
 
     private func logResumeData(_ data: Data, context: String) {
@@ -475,7 +488,7 @@ final class UploadStore: NSObject, ObservableObject {
 
     private func classifyCompletionVerificationResponse(_ response: HTTPURLResponse, expectedBytes: Int64) -> CompletionVerificationAttemptResult {
         let offset = response.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-        let isIncomplete = parseUploadIncomplete(from: response)
+        let isComplete = parseUploadComplete(from: response)
         let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased()
         let ngrokErrorCode = response.value(forHTTPHeaderField: "ngrok-error-code")
 
@@ -510,7 +523,7 @@ final class UploadStore: NSObject, ObservableObject {
             return .failure(message: "Server reported \(offset) bytes for an upload expected to be \(expectedBytes) bytes.")
         }
 
-        if isIncomplete == true {
+        if isComplete == false {
             return .retryable(message: "Server still reports the upload as incomplete.")
         }
 
@@ -521,6 +534,7 @@ final class UploadStore: NSObject, ObservableObject {
         let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased()
         let ngrokErrorCode = response.value(forHTTPHeaderField: "ngrok-error-code")
         let hasResumableHeaders = response.value(forHTTPHeaderField: "Upload-Offset") != nil
+            || response.value(forHTTPHeaderField: "Upload-Complete") != nil
             || response.value(forHTTPHeaderField: "Upload-Incomplete") != nil
 
         if (200 ..< 300).contains(response.statusCode) {
@@ -544,7 +558,7 @@ final class UploadStore: NSObject, ObservableObject {
 
     private func verifyCompletion(for id: UUID, response: HTTPURLResponse) async -> CompletionVerificationResult {
         let responseOffset = response.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-        let responseIsIncomplete = parseUploadIncomplete(from: response)
+        let responseIsComplete = parseUploadComplete(from: response)
         let expectedBytes = upload(with: id)?.expectedBytes ?? 0
 
         print(
@@ -552,12 +566,12 @@ final class UploadStore: NSObject, ObservableObject {
             "uploadID=\(id.uuidString)",
             "status=\(response.statusCode)",
             "responseOffset=\(String(describing: responseOffset))",
-            "responseIncomplete=\(String(describing: responseIsIncomplete))",
+            "responseComplete=\(String(describing: responseIsComplete))",
             "expectedBytes=\(expectedBytes)",
             "headers=\(response.allHeaderFields)"
         )
 
-        if responseIsIncomplete == true {
+        if responseIsComplete == false {
             if let responseOffset, expectedBytes > 0, responseOffset < expectedBytes {
                 return .resumeRequired(
                     serverOffset: responseOffset,
@@ -635,7 +649,7 @@ final class UploadStore: NSObject, ObservableObject {
                 }
 
                 let headOffset = httpHeadResponse.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-                let headIsIncomplete = parseUploadIncomplete(from: httpHeadResponse)
+                let headIsComplete = parseUploadComplete(from: httpHeadResponse)
 
                 print(
                     "[UploadStore] HEAD verification response",
@@ -643,7 +657,7 @@ final class UploadStore: NSObject, ObservableObject {
                     "attempt=\(attemptIndex + 1)",
                     "status=\(httpHeadResponse.statusCode)",
                     "offset=\(String(describing: headOffset))",
-                    "incomplete=\(String(describing: headIsIncomplete))",
+                    "complete=\(String(describing: headIsComplete))",
                     "headers=\(httpHeadResponse.allHeaderFields)"
                 )
 
@@ -763,6 +777,7 @@ final class UploadStore: NSObject, ObservableObject {
         request.networkServiceType = .responsiveData
         request.setValue(Self.draftInteropVersion, forHTTPHeaderField: "Upload-Draft-Interop-Version")
         request.setValue(String(serverOffset), forHTTPHeaderField: "Upload-Offset")
+        request.setValue("?1", forHTTPHeaderField: "Upload-Complete")
         if let authToken = record.authToken, authToken.isEmpty == false {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         }
