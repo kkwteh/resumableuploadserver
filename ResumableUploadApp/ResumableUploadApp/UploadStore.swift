@@ -16,7 +16,6 @@ final class UploadStore: NSObject, ObservableObject {
     private let manifestURL: URL
     private let stagedVideoDirectoryURL: URL
     private let resumeDataDirectoryURL: URL
-    private let resumeChunkDirectoryURL: URL
 
     private static let draftInteropVersion = "6"
 
@@ -43,7 +42,6 @@ final class UploadStore: NSObject, ObservableObject {
         manifestURL = baseDirectory.appendingPathComponent("uploads.json")
         stagedVideoDirectoryURL = baseDirectory.appendingPathComponent("staged-videos", isDirectory: true)
         resumeDataDirectoryURL = baseDirectory.appendingPathComponent("resume-data", isDirectory: true)
-        resumeChunkDirectoryURL = baseDirectory.appendingPathComponent("resume-chunks", isDirectory: true)
 
         super.init()
 
@@ -103,7 +101,6 @@ final class UploadStore: NSObject, ObservableObject {
                 responseStatusCode: nil,
                 errorDescription: nil,
                 resumeDataFileName: nil,
-                resumableUploadURL: nil,
                 lastUpdatedAt: .now
             )
 
@@ -175,7 +172,6 @@ final class UploadStore: NSObject, ObservableObject {
 
             do {
                 try removeResumeData(for: id)
-                try removeResumeChunk(for: id)
                 try removeLocalFile(for: id)
             } catch {
                 messageBanner = error.localizedDescription
@@ -185,7 +181,6 @@ final class UploadStore: NSObject, ObservableObject {
                 upload.state = .canceled
                 upload.taskIdentifier = nil
                 upload.resumeDataFileName = nil
-                upload.resumableUploadURL = nil
                 upload.localFilePath = nil
                 upload.errorDescription = nil
                 upload.lastUpdatedAt = .now
@@ -266,7 +261,6 @@ final class UploadStore: NSObject, ObservableObject {
             upload.responseStatusCode = nil
             if isResumingFromNativeResumeData == false {
                 upload.bytesSent = 0
-                upload.resumableUploadURL = nil
             }
             upload.lastUpdatedAt = .now
         }
@@ -354,7 +348,6 @@ final class UploadStore: NSObject, ObservableObject {
     private func createDirectoriesIfNeeded() {
         try? fileManager.createDirectory(at: stagedVideoDirectoryURL, withIntermediateDirectories: true)
         try? fileManager.createDirectory(at: resumeDataDirectoryURL, withIntermediateDirectories: true)
-        try? fileManager.createDirectory(at: resumeChunkDirectoryURL, withIntermediateDirectories: true)
     }
 
     private func writeResumeData(_ data: Data, for id: UUID) throws -> String {
@@ -391,44 +384,6 @@ final class UploadStore: NSObject, ObservableObject {
         if fileManager.fileExists(atPath: fileURL.path) {
             try fileManager.removeItem(at: fileURL)
         }
-    }
-
-    private func removeResumeChunk(for id: UUID) throws {
-        let fileURL = resumeChunkDirectoryURL.appendingPathComponent("\(id.uuidString).partial")
-        if fileManager.fileExists(atPath: fileURL.path) {
-            try fileManager.removeItem(at: fileURL)
-        }
-    }
-
-    private func parseStructuredFieldBoolean(_ value: String?) -> Bool? {
-        guard let value = value?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        else {
-            return nil
-        }
-
-        switch value {
-        case "?1", "true":
-            return true
-        case "?0", "false":
-            return false
-        default:
-            return nil
-        }
-    }
-
-    private func parseUploadComplete(from response: HTTPURLResponse) -> Bool? {
-        if let isComplete = parseStructuredFieldBoolean(response.value(forHTTPHeaderField: "Upload-Complete")) {
-            return isComplete
-        }
-
-        // Accept the pre-v6 header for compatibility with older servers.
-        if let isIncomplete = parseStructuredFieldBoolean(response.value(forHTTPHeaderField: "Upload-Incomplete")) {
-            return isIncomplete == false
-        }
-
-        return nil
     }
 
     private func logResumeData(_ data: Data, context: String) {
@@ -471,358 +426,6 @@ final class UploadStore: NSObject, ObservableObject {
         }
 
         return String(describing: value)
-    }
-
-    private enum CompletionVerificationResult {
-        case success(verifiedOffset: Int64?)
-        case resumeRequired(serverOffset: Int64, message: String)
-        case failure(message: String)
-    }
-
-    private enum CompletionVerificationAttemptResult {
-        case success(verifiedOffset: Int64?)
-        case resumeRequired(serverOffset: Int64, message: String)
-        case retryable(message: String)
-        case failure(message: String)
-    }
-
-    private func classifyCompletionVerificationResponse(_ response: HTTPURLResponse, expectedBytes: Int64) -> CompletionVerificationAttemptResult {
-        let offset = response.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-        let isComplete = parseUploadComplete(from: response)
-        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased()
-        let ngrokErrorCode = response.value(forHTTPHeaderField: "ngrok-error-code")
-
-        if let ngrokErrorCode {
-            return .retryable(message: "Verification hit transient ngrok error \(ngrokErrorCode).")
-        }
-
-        if response.statusCode == 404, contentType?.contains("text/html") == true {
-            return .retryable(message: "Verification hit a transient HTML 404 response.")
-        }
-
-        if [404, 408, 409, 425, 429, 502, 503, 504].contains(response.statusCode) {
-            return .retryable(message: "Verification returned transient HTTP \(response.statusCode).")
-        }
-
-        guard (200 ..< 300).contains(response.statusCode) else {
-            return .failure(message: "Completion verification HEAD returned HTTP \(response.statusCode).")
-        }
-
-        if expectedBytes > 0, let offset {
-            if offset == expectedBytes {
-                return .success(verifiedOffset: offset)
-            }
-
-            if offset < expectedBytes {
-                return .resumeRequired(
-                    serverOffset: offset,
-                    message: "Server currently acknowledges only \(offset) of \(expectedBytes) bytes."
-                )
-            }
-
-            return .failure(message: "Server reported \(offset) bytes for an upload expected to be \(expectedBytes) bytes.")
-        }
-
-        if isComplete == false {
-            return .retryable(message: "Server still reports the upload as incomplete.")
-        }
-
-        return .retryable(message: "Server did not provide an Upload-Offset during completion verification.")
-    }
-
-    private func shouldAttemptCompletionVerification(for response: HTTPURLResponse) -> Bool {
-        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased()
-        let ngrokErrorCode = response.value(forHTTPHeaderField: "ngrok-error-code")
-        let hasResumableHeaders = response.value(forHTTPHeaderField: "Upload-Offset") != nil
-            || response.value(forHTTPHeaderField: "Upload-Complete") != nil
-            || response.value(forHTTPHeaderField: "Upload-Incomplete") != nil
-
-        if (200 ..< 300).contains(response.statusCode) {
-            return true
-        }
-
-        if ngrokErrorCode != nil {
-            return true
-        }
-
-        if [404, 408, 409, 425, 429, 502, 503, 504].contains(response.statusCode) {
-            return true
-        }
-
-        if contentType?.contains("text/html") == true {
-            return true
-        }
-
-        return hasResumableHeaders
-    }
-
-    private func verifyCompletion(for id: UUID, response: HTTPURLResponse) async -> CompletionVerificationResult {
-        let responseOffset = response.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-        let responseIsComplete = parseUploadComplete(from: response)
-        let expectedBytes = upload(with: id)?.expectedBytes ?? 0
-
-        print(
-            "[UploadStore] Verifying completion",
-            "uploadID=\(id.uuidString)",
-            "status=\(response.statusCode)",
-            "responseOffset=\(String(describing: responseOffset))",
-            "responseComplete=\(String(describing: responseIsComplete))",
-            "expectedBytes=\(expectedBytes)",
-            "headers=\(response.allHeaderFields)"
-        )
-
-        if responseIsComplete == false {
-            if let responseOffset, expectedBytes > 0, responseOffset < expectedBytes {
-                return .resumeRequired(
-                    serverOffset: responseOffset,
-                    message: "Final response reported the upload incomplete at offset \(responseOffset)."
-                )
-            }
-
-            return .failure(message: "Server reported the upload is incomplete.")
-        }
-
-        if expectedBytes > 0, let responseOffset {
-            if responseOffset == expectedBytes {
-                return .success(verifiedOffset: responseOffset)
-            }
-
-            if responseOffset < expectedBytes {
-                return .resumeRequired(
-                    serverOffset: responseOffset,
-                    message: "Final response acknowledged only \(responseOffset) of \(expectedBytes) bytes."
-                )
-            }
-
-            return .failure(message: "Server acknowledged an invalid offset of \(responseOffset) bytes.")
-        }
-
-        guard let record = upload(with: id),
-              let resumableUploadURLString = record.resumableUploadURL,
-              let resumableUploadURL = URL(string: resumableUploadURLString)
-        else {
-            return .failure(message: "Server completion could not be verified because the resumable upload URL is unavailable.")
-        }
-
-        print(
-            "[UploadStore] Starting HEAD verification loop",
-            "uploadID=\(id.uuidString)",
-            "resumableUploadURL=\(resumableUploadURL.absoluteString)",
-            "expectedBytes=\(expectedBytes)"
-        )
-
-        var request = URLRequest(url: resumableUploadURL)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 60
-        request.setValue(Self.draftInteropVersion, forHTTPHeaderField: "Upload-Draft-Interop-Version")
-        if let authToken = record.authToken, authToken.isEmpty == false {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-        }
-
-        let retryDelaysInSeconds: [UInt64] = [0, 1, 2, 4, 8, 16, 30]
-        var lastRetryableMessage = "Server completion could not yet be verified."
-
-        for (attemptIndex, delayInSeconds) in retryDelaysInSeconds.enumerated() {
-            if delayInSeconds > 0 {
-                print(
-                    "[UploadStore] Waiting before HEAD verification retry",
-                    "uploadID=\(id.uuidString)",
-                    "attempt=\(attemptIndex + 1)",
-                    "delaySeconds=\(delayInSeconds)"
-                )
-                try? await Task.sleep(nanoseconds: delayInSeconds * 1_000_000_000)
-            }
-
-            print(
-                "[UploadStore] Sending HEAD verification request",
-                "uploadID=\(id.uuidString)",
-                "attempt=\(attemptIndex + 1)",
-                "url=\(resumableUploadURL.absoluteString)",
-                "headers=\(request.allHTTPHeaderFields ?? [:])"
-            )
-
-            do {
-                let (_, headResponse) = try await URLSession.shared.data(for: request)
-                guard let httpHeadResponse = headResponse as? HTTPURLResponse else {
-                    lastRetryableMessage = "Server returned an invalid HEAD response during completion verification."
-                    continue
-                }
-
-                let headOffset = httpHeadResponse.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-                let headIsComplete = parseUploadComplete(from: httpHeadResponse)
-
-                print(
-                    "[UploadStore] HEAD verification response",
-                    "uploadID=\(id.uuidString)",
-                    "attempt=\(attemptIndex + 1)",
-                    "status=\(httpHeadResponse.statusCode)",
-                    "offset=\(String(describing: headOffset))",
-                    "complete=\(String(describing: headIsComplete))",
-                    "headers=\(httpHeadResponse.allHeaderFields)"
-                )
-
-                switch classifyCompletionVerificationResponse(httpHeadResponse, expectedBytes: expectedBytes) {
-                case .success(let verifiedOffset):
-                    return .success(verifiedOffset: verifiedOffset)
-                case .resumeRequired(let serverOffset, let message):
-                    print(
-                        "[UploadStore] Completion verification found incomplete upload",
-                        "uploadID=\(id.uuidString)",
-                        "attempt=\(attemptIndex + 1)",
-                        "serverOffset=\(serverOffset)",
-                        "message=\(message)"
-                    )
-                    return .resumeRequired(serverOffset: serverOffset, message: message)
-                case .retryable(let message):
-                    lastRetryableMessage = message
-                    print("[UploadStore] Completion verification will retry uploadID=\(id.uuidString) reason=\(message)")
-                case .failure(let message):
-                    return .failure(message: message)
-                }
-            } catch {
-                lastRetryableMessage = "Completion verification failed: \(error.localizedDescription)"
-                print(
-                    "[UploadStore] HEAD verification failed",
-                    "uploadID=\(id.uuidString)",
-                    "attempt=\(attemptIndex + 1)",
-                    "error=\(error.localizedDescription)"
-                )
-            }
-        }
-
-        return .failure(message: lastRetryableMessage)
-    }
-
-    private enum ResumeLaunchResult {
-        case started
-        case failure(message: String)
-    }
-
-    private func resumeIncompleteUpload(for id: UUID, serverOffset: Int64) async -> ResumeLaunchResult {
-        guard let record = upload(with: id) else {
-            return .failure(message: "Upload record was unavailable while attempting to resume.")
-        }
-
-        guard let resumableUploadURLString = record.resumableUploadURL,
-              let resumableUploadURL = URL(string: resumableUploadURLString)
-        else {
-            return .failure(message: "Cannot resume because the resumable upload URL is unavailable.")
-        }
-
-        guard let localFilePath = record.localFilePath else {
-            return .failure(message: "Cannot resume because the staged video is unavailable.")
-        }
-
-        let localFileURL = URL(fileURLWithPath: localFilePath)
-        guard fileManager.fileExists(atPath: localFileURL.path) else {
-            return .failure(message: "Cannot resume because the staged video no longer exists.")
-        }
-
-        let expectedBytes = record.expectedBytes > 0 ? record.expectedBytes : record.fileSize
-        guard serverOffset >= 0 else {
-            return .failure(message: "Cannot resume because the server reported a negative upload offset.")
-        }
-
-        guard serverOffset < expectedBytes else {
-            return .failure(message: "Resume was requested even though the server offset \(serverOffset) is not shorter than the expected upload size \(expectedBytes).")
-        }
-
-        let partialFileURL = resumeChunkDirectoryURL.appendingPathComponent("\(id.uuidString).partial")
-
-        print(
-            "[UploadStore] Starting draft resume upload",
-            "uploadID=\(id.uuidString)",
-            "resumableUploadURL=\(resumableUploadURL.absoluteString)",
-            "serverOffset=\(serverOffset)",
-            "expectedBytes=\(expectedBytes)",
-            "sourceFile=\(localFileURL.path)",
-            "partialFile=\(partialFileURL.path)"
-        )
-
-        do {
-            try removeResumeChunk(for: id)
-        } catch {
-            print(
-                "[UploadStore] Failed to remove stale resume chunk",
-                "uploadID=\(id.uuidString)",
-                "error=\(error.localizedDescription)"
-            )
-        }
-
-        let remainingBytes: Int64
-        do {
-            let resumeChunkDirectoryURL = self.resumeChunkDirectoryURL
-            remainingBytes = try await Task.detached(priority: .userInitiated) {
-                try Self.createResumeChunk(
-                    sourceFileURL: localFileURL,
-                    startingAt: serverOffset,
-                    destinationFileURL: partialFileURL,
-                    parentDirectoryURL: resumeChunkDirectoryURL
-                )
-            }.value
-        } catch {
-            return .failure(message: "Failed to prepare the remaining upload chunk: \(error.localizedDescription)")
-        }
-
-        guard remainingBytes > 0 else {
-            return .failure(message: "The server offset \(serverOffset) leaves no bytes available to resume.")
-        }
-
-        var request = URLRequest(url: resumableUploadURL)
-        request.httpMethod = "PATCH"
-        request.timeoutInterval = 60 * 60 * 24
-        request.allowsCellularAccess = true
-        request.allowsConstrainedNetworkAccess = true
-        request.allowsExpensiveNetworkAccess = true
-        request.networkServiceType = .responsiveData
-        request.setValue(Self.draftInteropVersion, forHTTPHeaderField: "Upload-Draft-Interop-Version")
-        request.setValue(String(serverOffset), forHTTPHeaderField: "Upload-Offset")
-        request.setValue("?1", forHTTPHeaderField: "Upload-Complete")
-        if let authToken = record.authToken, authToken.isEmpty == false {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-        }
-
-        print(
-            "[UploadStore] Resume PATCH request prepared",
-            "uploadID=\(id.uuidString)",
-            "headers=\(request.allHTTPHeaderFields ?? [:])",
-            "remainingBytes=\(remainingBytes)"
-        )
-
-        let uploadTask = session.uploadTask(with: request, fromFile: partialFileURL)
-        uploadTask.taskDescription = Self.taskDescription(for: id, baseOffset: serverOffset)
-        uploadTask.priority = URLSessionTask.highPriority
-        uploadTask.resume()
-
-        do {
-            try removeResumeData(for: id)
-        } catch {
-            print(
-                "[UploadStore] Failed to remove stale native resume data before manual resume",
-                "uploadID=\(id.uuidString)",
-                "error=\(error.localizedDescription)"
-            )
-        }
-
-        updateUpload(id: id) { upload in
-            upload.state = .uploading
-            upload.taskIdentifier = uploadTask.taskIdentifier
-            upload.bytesSent = max(upload.bytesSent, serverOffset)
-            upload.expectedBytes = expectedBytes
-            upload.responseStatusCode = nil
-            upload.errorDescription = nil
-            upload.resumeDataFileName = nil
-            upload.lastUpdatedAt = .now
-        }
-
-        print(
-            "[UploadStore] Draft resume upload started",
-            "uploadID=\(id.uuidString)",
-            "taskIdentifier=\(uploadTask.taskIdentifier)",
-            "taskDescription=\(uploadTask.taskDescription ?? "")"
-        )
-
-        return .started
     }
 
     private func persistResumeDataAndRestart(_ data: Data, for id: UUID) {
@@ -876,18 +479,6 @@ final class UploadStore: NSObject, ObservableObject {
 
     private nonisolated static func taskDescription(for id: UUID, baseOffset: Int64) -> String {
         "\(id.uuidString)|\(baseOffset)"
-    }
-
-    private nonisolated static func resolvedUploadURL(from locationHeader: String, relativeTo requestURL: URL?) -> URL? {
-        if let absoluteURL = URL(string: locationHeader), absoluteURL.scheme != nil {
-            return absoluteURL
-        }
-
-        guard let requestURL else {
-            return nil
-        }
-
-        return URL(string: locationHeader, relativeTo: requestURL)?.absoluteURL
     }
 
     private func finishBackgroundEventsIfNeeded() {
@@ -1028,70 +619,6 @@ final class UploadStore: NSObject, ObservableObject {
         return StagedVideo(url: destinationURL, fileName: sanitizedName.isEmpty ? destinationURL.lastPathComponent : sanitizedName, fileSize: size)
     }
 
-    private nonisolated static func createResumeChunk(
-        sourceFileURL: URL,
-        startingAt offset: Int64,
-        destinationFileURL: URL,
-        parentDirectoryURL: URL
-    ) throws -> Int64 {
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
-
-        if fileManager.fileExists(atPath: destinationFileURL.path) {
-            try fileManager.removeItem(at: destinationFileURL)
-        }
-
-        let fileSize = try sourceFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? 0
-        guard offset >= 0, offset <= fileSize else {
-            throw NSError(
-                domain: "UploadStore",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Cannot create a resume chunk for offset \(offset) in a file of \(fileSize) bytes."]
-            )
-        }
-
-        let remainingBytes = fileSize - offset
-        guard remainingBytes > 0 else {
-            let created = fileManager.createFile(atPath: destinationFileURL.path, contents: Data())
-            if created == false {
-                throw NSError(
-                    domain: "UploadStore",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to create an empty resume chunk file."]
-                )
-            }
-            return 0
-        }
-
-        let sourceHandle = try FileHandle(forReadingFrom: sourceFileURL)
-        let destinationCreated = fileManager.createFile(atPath: destinationFileURL.path, contents: nil)
-        guard destinationCreated else {
-            throw NSError(
-                domain: "UploadStore",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to create the resume chunk destination file."]
-            )
-        }
-        let destinationHandle = try FileHandle(forWritingTo: destinationFileURL)
-
-        defer {
-            try? sourceHandle.close()
-            try? destinationHandle.close()
-        }
-
-        try sourceHandle.seek(toOffset: UInt64(offset))
-
-        let chunkSize = 1_048_576
-        while true {
-            let data = try sourceHandle.read(upToCount: chunkSize) ?? Data()
-            if data.isEmpty {
-                break
-            }
-            try destinationHandle.write(contentsOf: data)
-        }
-
-        return remainingBytes
-    }
 }
 
 private struct StagedVideo {
@@ -1152,16 +679,12 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
         }
 
         let offset = response.value(forHTTPHeaderField: "Upload-Offset").flatMap(Int64.init)
-        let resumableUploadURL = response.value(forHTTPHeaderField: "Location").flatMap {
-            Self.resolvedUploadURL(from: $0, relativeTo: task.currentRequest?.url ?? task.originalRequest?.url)
-        }
 
         print(
             "[UploadStore] Received informational response",
             "uploadID=\(id.uuidString)",
             "status=\(response.statusCode)",
             "offset=\(String(describing: offset))",
-            "location=\(String(describing: resumableUploadURL?.absoluteString))",
             "headers=\(response.allHeaderFields)"
         )
 
@@ -1169,9 +692,6 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
             self.updateUpload(id: id) { upload in
                 if let offset {
                     upload.bytesSent = max(upload.bytesSent, offset)
-                }
-                if let resumableUploadURL {
-                    upload.resumableUploadURL = resumableUploadURL.absoluteString
                 }
                 upload.lastUpdatedAt = .now
             }
@@ -1228,18 +748,15 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
             }
 
             let statusCode = response.statusCode
-            let shouldAttemptVerification = self.shouldAttemptCompletionVerification(for: response)
-
             print(
                 "[UploadStore] Final upload response",
                 "uploadID=\(id.uuidString)",
                 "status=\(statusCode)",
                 "taskDescription=\(task.taskDescription ?? "")",
-                "headers=\(response.allHeaderFields)",
-                "willAttemptVerification=\(shouldAttemptVerification)"
+                "headers=\(response.allHeaderFields)"
             )
 
-            if (200 ..< 300).contains(statusCode) == false && shouldAttemptVerification == false {
+            if (200 ..< 300).contains(statusCode) == false {
                 self.updateUpload(id: id) { upload in
                     upload.state = .failed
                     upload.taskIdentifier = nil
@@ -1250,65 +767,22 @@ extension UploadStore: URLSessionDelegate, URLSessionTaskDelegate, URLSessionDat
                 return
             }
 
-            if (200 ..< 300).contains(statusCode) == false {
-                print(
-                    "[UploadStore] Final response is non-success but retryable",
-                    "uploadID=\(id.uuidString)",
-                    "status=\(statusCode)"
-                )
+            do {
+                try self.removeResumeData(for: id)
+                try self.removeLocalFile(for: id)
+            } catch {
+                self.messageBanner = error.localizedDescription
             }
 
-            let verificationResult = await self.verifyCompletion(for: id, response: response)
-
-            switch verificationResult {
-            case .success(let verifiedOffset):
-                do {
-                    try self.removeResumeData(for: id)
-                    try self.removeResumeChunk(for: id)
-                    try self.removeLocalFile(for: id)
-                } catch {
-                    self.messageBanner = error.localizedDescription
-                }
-
-                self.updateUpload(id: id) { upload in
-                    upload.state = .completed
-                    upload.taskIdentifier = nil
-                    upload.bytesSent = max(upload.bytesSent, verifiedOffset ?? upload.expectedBytes)
-                    upload.responseStatusCode = statusCode
-                    upload.errorDescription = nil
-                    upload.resumeDataFileName = nil
-                    upload.resumableUploadURL = nil
-                    upload.localFilePath = nil
-                    upload.lastUpdatedAt = .now
-                }
-            case .resumeRequired(let serverOffset, let message):
-                print(
-                    "[UploadStore] Completion verification will resume upload",
-                    "uploadID=\(id.uuidString)",
-                    "serverOffset=\(serverOffset)",
-                    "message=\(message)"
-                )
-
-                let resumeResult = await self.resumeIncompleteUpload(for: id, serverOffset: serverOffset)
-                if case .failure(let resumeMessage) = resumeResult {
-                    print("[UploadStore] Resume launch failed uploadID=\(id.uuidString) message=\(resumeMessage)")
-                    self.updateUpload(id: id) { upload in
-                        upload.state = .failed
-                        upload.taskIdentifier = nil
-                        upload.responseStatusCode = statusCode
-                        upload.errorDescription = resumeMessage
-                        upload.lastUpdatedAt = .now
-                    }
-                }
-            case .failure(let message):
-                print("[UploadStore] Completion verification failed uploadID=\(id.uuidString) message=\(message)")
-                self.updateUpload(id: id) { upload in
-                    upload.state = .failed
-                    upload.taskIdentifier = nil
-                    upload.responseStatusCode = statusCode
-                    upload.errorDescription = message
-                    upload.lastUpdatedAt = .now
-                }
+            self.updateUpload(id: id) { upload in
+                upload.state = .completed
+                upload.taskIdentifier = nil
+                upload.bytesSent = max(upload.bytesSent, upload.expectedBytes)
+                upload.responseStatusCode = statusCode
+                upload.errorDescription = nil
+                upload.resumeDataFileName = nil
+                upload.localFilePath = nil
+                upload.lastUpdatedAt = .now
             }
         }
     }

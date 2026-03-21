@@ -6,11 +6,11 @@ Minimal iOS app for background video uploads using `URLSession` file-backed uplo
 
 - Lets the user pick a single video from their photo library.
 - Lets the user specify the backend URL and bearer token in the app UI.
-- Stages the video into the app sandbox so the file remains available for background transfer and later resume.
+- Stages the video into the app sandbox so the file remains available for background transfer.
 - Starts uploads in a fixed-identifier background `URLSession`.
 - Persists upload state so the app can reconnect UI state to in-flight tasks after relaunch.
 - Supports pause, resume, and cancel from the app UI.
-- Automatically retries interrupted uploads when `URLSession` provides native resume data after a recoverable failure.
+- Uses native `URLSession` resume data for pause/resume and failed-task recovery when iOS provides it.
 - Uses aggressive background transfer settings:
   - `sessionSendsLaunchEvents = true`
   - `isDiscretionary = false`
@@ -50,5 +50,5 @@ Useful references:
 
 - Background uploads must be created from files, not in-memory data, to remain eligible for background execution.
 - Manual pause uses `cancel(byProducingResumeData:)`. If the server does not support Apple's resumable upload integration, resume data will be `nil` and the app surfaces that explicitly.
-- Recoverable interruptions such as transient connection loss or a resumable server restart can continue automatically only when `URLSession` supplies resume data for the failed task.
+- The app now relies on the background `URLSession` result directly instead of issuing extra HEAD verification requests or constructing its own PATCH resume uploads.
 - New uploads include `Authorization: Bearer <token>` when the token field is populated.

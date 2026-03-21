@@ -18,7 +18,6 @@ final class UploadRecordTests: XCTestCase {
             responseStatusCode: nil,
             errorDescription: nil,
             resumeDataFileName: nil,
-            resumableUploadURL: nil,
             lastUpdatedAt: .now
         )
 
@@ -41,7 +40,6 @@ final class UploadRecordTests: XCTestCase {
             responseStatusCode: nil,
             errorDescription: nil,
             resumeDataFileName: "resume.bin",
-            resumableUploadURL: "https://example.com/files/upload-123",
             lastUpdatedAt: .now
         )
 
@@ -73,7 +71,6 @@ final class UploadRecordTests: XCTestCase {
             responseStatusCode: nil,
             errorDescription: "networkConnectionLost",
             resumeDataFileName: "resume.bin",
-            resumableUploadURL: "https://example.com/files/upload-123",
             lastUpdatedAt: .now
         )
 
