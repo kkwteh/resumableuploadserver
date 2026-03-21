@@ -8,3 +8,4 @@ UploadServers/go/resumable-upload-server
 ResumableUploadApp/ResumableUploadApp.xcodeproj/project.xcworkspace/xcuserdata/
 .DS_Store
 launch.json
+ResumableUploadApp/ResumableUploadApp.xcodeproj/project.xcworkspace/contents.xcworkspacedata
