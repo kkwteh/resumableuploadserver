@@ -224,8 +224,6 @@ final class UploadStore: NSObject, ObservableObject {
             request.allowsConstrainedNetworkAccess = true
             request.allowsExpensiveNetworkAccess = true
             request.networkServiceType = .responsiveData
-            request.setValue(Self.draftInteropVersion, forHTTPHeaderField: "Upload-Draft-Interop-Version")
-            request.setValue("?1", forHTTPHeaderField: "Upload-Complete")
             request.setValue(contentType(for: fileURL), forHTTPHeaderField: "Content-Type")
             request.setValue(uploads[index].fileName, forHTTPHeaderField: "X-Upload-Filename")
             if let authToken = uploads[index].authToken, authToken.isEmpty == false {
