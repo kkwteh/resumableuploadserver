@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: UploadStore
     @AppStorage("uploadEndpoint") private var uploadEndpoint = "https://annie-uninitialled-untractably.ngrok-free.dev/files"
     @AppStorage("uploadAuthToken") private var uploadAuthToken = "019d0ab9-c19b-785c-82ab-209fce9b2eb0"
@@ -11,11 +12,7 @@ struct ContentView: View {
         NavigationStack {
             ZStack {
                 LinearGradient(
-                    colors: [
-                        Color(red: 0.95, green: 0.97, blue: 1.0),
-                        Color(red: 0.90, green: 0.94, blue: 0.98),
-                        Color(red: 0.98, green: 0.93, blue: 0.89)
-                    ],
+                    colors: theme.backgroundGradient,
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -63,11 +60,11 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Background video uploads that keep going.")
                 .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.28))
+                .foregroundStyle(theme.primaryText)
 
             Text("Pick a video, let iOS keep pushing in a background session, and pause or resume when you need to.")
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryText)
 
             Button {
                 isPresentingPicker = true
@@ -80,60 +77,88 @@ struct ContentView: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(Color(red: 0.16, green: 0.38, blue: 0.73))
+                .background(theme.accent)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .disabled(store.isImporting)
         }
         .padding(20)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(theme.heroBackground, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(theme.surfaceStroke, lineWidth: 1)
+        }
+        .shadow(color: theme.shadowColor, radius: 24, y: 12)
     }
 
     private var endpointCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Upload Endpoint")
                 .font(.headline)
+                .foregroundStyle(theme.primaryText)
 
             TextField("https://example.com/upload", text: $uploadEndpoint)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .autocorrectionDisabled()
+                .foregroundStyle(theme.primaryText)
                 .padding(14)
-                .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(theme.inputBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(theme.inputStroke, lineWidth: 1)
+                }
 
             SecureField("Bearer token", text: $uploadAuthToken)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .foregroundStyle(theme.primaryText)
                 .padding(14)
-                .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(theme.inputBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(theme.inputStroke, lineWidth: 1)
+                }
 
             Text("New uploads send `Authorization: Bearer <token>` when a token is provided. Use a backend that supports Apple's resumable-upload flow for pause/resume and automatic recovery.")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryText)
         }
         .padding(18)
-        .background(Color.white.opacity(0.68), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(theme.cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(theme.surfaceStroke, lineWidth: 1)
+        }
+        .shadow(color: theme.shadowColor, radius: 18, y: 8)
     }
 
     private var uploadsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Uploads")
                 .font(.title3.weight(.semibold))
+                .foregroundStyle(theme.primaryText)
 
             if store.uploads.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("No uploads yet")
                         .font(.headline)
+                        .foregroundStyle(theme.primaryText)
                     Text("Pick a video to create a staged background upload task.")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.secondaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
-                .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(theme.cardBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(theme.surfaceStroke, lineWidth: 1)
+                }
             } else {
                 ForEach(store.uploads) { upload in
                     UploadCard(
+                        theme: theme,
                         upload: upload,
                         pauseAction: { store.pauseUpload(id: upload.id) },
                         resumeAction: { store.resumeUpload(id: upload.id) },
@@ -154,9 +179,14 @@ struct ContentView: View {
             }
         )
     }
+
+    private var theme: AppTheme {
+        AppTheme(colorScheme: colorScheme)
+    }
 }
 
 private struct UploadCard: View {
+    let theme: AppTheme
     let upload: UploadRecord
     let pauseAction: () -> Void
     let resumeAction: () -> Void
@@ -169,6 +199,7 @@ private struct UploadCard: View {
                     Text(upload.fileName)
                         .font(.headline)
                         .lineLimit(2)
+                        .foregroundStyle(theme.primaryText)
 
                     Text(statusText)
                         .font(.subheadline)
@@ -179,7 +210,7 @@ private struct UploadCard: View {
 
                 Text(byteProgressText)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryText)
             }
 
             ProgressView(value: upload.progressFraction)
@@ -188,7 +219,7 @@ private struct UploadCard: View {
             if let errorDescription = upload.errorDescription, upload.state == .failed {
                 Text(errorDescription)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryText)
             }
 
             HStack(spacing: 10) {
@@ -206,7 +237,12 @@ private struct UploadCard: View {
             }
         }
         .padding(18)
-        .background(Color.white.opacity(0.74), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(theme.cardBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(theme.surfaceStroke, lineWidth: 1)
+        }
+        .shadow(color: theme.shadowColor, radius: 18, y: 8)
     }
 
     private func actionButton(_ title: String, tint: Color, foreground: Color, action: @escaping () -> Void) -> some View {
@@ -266,5 +302,52 @@ private struct UploadCard: View {
         }
 
         return "\(sent) / \(total)"
+    }
+}
+
+private struct AppTheme {
+    let backgroundGradient: [Color]
+    let heroBackground: Color
+    let cardBackground: Color
+    let inputBackground: Color
+    let inputStroke: Color
+    let surfaceStroke: Color
+    let primaryText: Color
+    let secondaryText: Color
+    let accent: Color
+    let shadowColor: Color
+
+    init(colorScheme: ColorScheme) {
+        accent = Color(red: 0.23, green: 0.49, blue: 0.90)
+
+        if colorScheme == .dark {
+            backgroundGradient = [
+                Color(red: 0.06, green: 0.08, blue: 0.13),
+                Color(red: 0.10, green: 0.12, blue: 0.20),
+                Color(red: 0.15, green: 0.10, blue: 0.18)
+            ]
+            heroBackground = Color(red: 0.12, green: 0.14, blue: 0.21).opacity(0.96)
+            cardBackground = Color(red: 0.10, green: 0.12, blue: 0.18).opacity(0.92)
+            inputBackground = Color(red: 0.16, green: 0.18, blue: 0.25).opacity(0.98)
+            inputStroke = Color.white.opacity(0.10)
+            surfaceStroke = Color.white.opacity(0.08)
+            primaryText = Color(red: 0.95, green: 0.97, blue: 1.0)
+            secondaryText = Color(red: 0.71, green: 0.75, blue: 0.83)
+            shadowColor = Color.black.opacity(0.32)
+        } else {
+            backgroundGradient = [
+                Color(red: 0.95, green: 0.97, blue: 1.0),
+                Color(red: 0.90, green: 0.94, blue: 0.98),
+                Color(red: 0.98, green: 0.93, blue: 0.89)
+            ]
+            heroBackground = Color.white.opacity(0.58)
+            cardBackground = Color.white.opacity(0.70)
+            inputBackground = Color.white.opacity(0.82)
+            inputStroke = Color.white.opacity(0.70)
+            surfaceStroke = Color.white.opacity(0.48)
+            primaryText = Color(red: 0.14, green: 0.19, blue: 0.28)
+            secondaryText = Color.secondary
+            shadowColor = Color(red: 0.16, green: 0.22, blue: 0.32).opacity(0.10)
+        }
     }
 }
