@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: UploadStore
-    @AppStorage("uploadEndpoint") private var uploadEndpoint = "https://annie-uninitialled-untractably.ngrok-free.dev/files"
+    @AppStorage("uploadEndpoint") private var uploadEndpoint = "https://tusd.staging.navigateai.co/files/"
     @AppStorage("uploadAuthToken") private var uploadAuthToken = "019d0ab9-c19b-785c-82ab-209fce9b2eb0"
 
     @State private var isPresentingPicker = false
